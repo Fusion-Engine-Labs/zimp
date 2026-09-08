@@ -15,7 +15,7 @@ pub const CacheSession = struct {
 
     fn location(ctx: *const CookContext) CacheLocation {
         if (ctx.project) |project| {
-            return .{ .dir = project.root_dir, .path = ".zephyr/.zcache" };
+            return .{ .dir = project.root_dir, .path = ".fusion/.zcache" };
         }
         return .{ .dir = ctx.output, .path = ".zcache" };
     }
@@ -118,10 +118,10 @@ test "CacheSession scopes project-mode cache to project metadata" {
         .project = .{
             .project_id = .zero,
             .root_dir = project_tmp.dir,
-            .manifest_path = ".zephyr/assets.zmanifest",
+            .manifest_path = ".fusion/assets.zmanifest",
         },
     };
     const cache_location = CacheSession.location(&ctx);
     try testing.expectEqual(project_tmp.dir.handle, cache_location.dir.handle);
-    try testing.expectEqualStrings(".zephyr/.zcache", cache_location.path);
+    try testing.expectEqualStrings(".fusion/.zcache", cache_location.path);
 }

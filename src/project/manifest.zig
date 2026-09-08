@@ -7,18 +7,18 @@ const atomic_file = @import("../shared/atomic_file.zig");
 const log = @import("../logger.zig");
 
 const MANIFEST_VERSION: u32 = 1;
-const DEFAULT_COOKED_ASSETS_DIR = ".zephyr/cooked";
+const DEFAULT_COOKED_ASSETS_DIR = ".fusion/cooked";
 const DEFAULT_ASSETS_DIR = "assets";
 const DEFAULT_SCENES_DIR = "scenes";
-const DEFAULT_ASSET_MANIFEST = ".zephyr/assets.zmanifest";
+const DEFAULT_ASSET_MANIFEST = ".fusion/assets.zmanifest";
 const DEFAULT_NAME = "Untitled Project";
-const DEFAULT_GENERATED_DIR = ".zephyr";
-const DEFAULT_FORMAT = "zephyr.proj";
+const DEFAULT_GENERATED_DIR = ".fusion";
+const DEFAULT_FORMAT = "fusion.proj";
 
 /// The manifest always lives at this filename. `format` is a pure identity
 /// string and is never used as a save path (a custom `format` value fails
 /// `validate()` instead of silently relocating the manifest).
-pub const manifest_filename = "zephyr.proj";
+pub const manifest_filename = "fusion.proj";
 pub const default_manifest_path = DEFAULT_GENERATED_DIR ++ "/" ++ manifest_filename;
 
 pub const max_manifest_bytes: usize = 64 * 1024;
@@ -188,17 +188,17 @@ test "ProjectManifest.save writes generated manifest file" {
 
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
-    const bytes = try tmp.dir.readFileAlloc(testing.io, ".zephyr/zephyr.proj", testing.allocator, .limited(4096));
+    const bytes = try tmp.dir.readFileAlloc(testing.io, ".fusion/fusion.proj", testing.allocator, .limited(4096));
     defer testing.allocator.free(bytes);
     try testing.expect(std.mem.indexOf(u8, bytes, "\"project_id\": \"bf5a424f-e93e-4977-9a7a-0c522318dfdc\"") != null);
 
     const parsed = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{});
     defer parsed.deinit();
-    try testing.expectEqualStrings(".zephyr", parsed.value.generated_dir);
+    try testing.expectEqualStrings(".fusion", parsed.value.generated_dir);
     try testing.expectEqualStrings("assets", parsed.value.assets_dir);
-    try testing.expectEqualStrings(".zephyr/cooked", parsed.value.cooked_assets_dir);
-    try testing.expectEqualStrings(".zephyr/assets.zmanifest", parsed.value.asset_manifest);
-    try testing.expectEqualStrings("zephyr.proj", parsed.value.format);
+    try testing.expectEqualStrings(".fusion/cooked", parsed.value.cooked_assets_dir);
+    try testing.expectEqualStrings(".fusion/assets.zmanifest", parsed.value.asset_manifest);
+    try testing.expectEqualStrings("fusion.proj", parsed.value.format);
     try testing.expect(parsed.value.project_id.eql(test_project_id));
 }
 
@@ -219,14 +219,14 @@ test "ProjectManifest round-trips through save and loadFromDir" {
 
     const manifest: ProjectManifest = .{
         .project_id = test_project_id,
-        .asset_manifest = ".zephyr/custom.zmanifest",
+        .asset_manifest = ".fusion/custom.zmanifest",
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
     var loaded = try ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, default_manifest_path);
     defer loaded.deinit(testing.allocator);
     try testing.expect(loaded.project_id.eql(test_project_id));
-    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.asset_manifest);
+    try testing.expectEqualStrings(".fusion/custom.zmanifest", loaded.asset_manifest);
 }
 
 test "ProjectManifest.loadFromDir rejects invalid manifests" {
@@ -299,7 +299,7 @@ test "ProjectManifest cloneOwned owns all string fields" {
     var owned = try source.cloneOwned(testing.allocator);
     defer owned.deinit(testing.allocator);
 
-    try testing.expectEqualStrings("zephyr.proj", owned.format);
+    try testing.expectEqualStrings("fusion.proj", owned.format);
     try testing.expectEqualStrings("game-scenes/main.scene", owned.default_scene.?);
     try testing.expectEqualStrings(".cache/assets.zmanifest", owned.asset_manifest);
 }
@@ -314,5 +314,5 @@ test "ProjectManifest path helpers expose configured asset roots" {
 
     try testing.expectEqualStrings("game-assets", manifest.assetsPath());
     try testing.expectEqualStrings(".cache/cooked", manifest.cookedAssetsPath());
-    try testing.expectEqualStrings(".zephyr/assets.zmanifest", manifest.assetManifestPath());
+    try testing.expectEqualStrings(".fusion/assets.zmanifest", manifest.assetManifestPath());
 }

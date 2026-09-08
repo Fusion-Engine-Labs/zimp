@@ -9,7 +9,7 @@ pub const ProjectCookInfo = struct {
     project_id: ProjectId,
     /// Project root; `manifest_path` is relative to it. Not owned.
     root_dir: std.Io.Dir,
-    /// e.g. ".zephyr/assets.zmanifest" (from the project manifest).
+    /// e.g. ".fusion/assets.zmanifest" (from the project manifest).
     manifest_path: []const u8,
 };
 

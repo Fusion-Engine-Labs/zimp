@@ -384,7 +384,7 @@ test "material cooker validates builtin standard uniforms without freeing embedd
 
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
-        \\shader = "zephyr/standard"
+        \\shader = "fusion/standard"
         \\[texture.u_albedo]
         \\path = "textures/missing.png"
         \\[params]

@@ -3,7 +3,7 @@ const schema_mod = @import("schema.zig");
 const ComponentSchema = schema_mod.ComponentSchema;
 
 pub const SchemaDescriptor = struct {
-    format: []const u8 = "zephyr.schema",
+    format: []const u8 = "fusion.schema",
     version: u32 = 1,
     schema_hash: u64,
     components: []const ComponentSchema,

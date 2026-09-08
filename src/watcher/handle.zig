@@ -144,7 +144,7 @@ test "WatchHandle starts an initial cook and creates the output directory" {
 
     try handle.waitForInitialCook();
     try testing.expectEqual(@as(usize, 1), observer.calls.load(.acquire));
-    try tmp.dir.access(testing.io, ".zephyr/cooked", .{});
+    try tmp.dir.access(testing.io, ".fusion/cooked", .{});
 
     handle.stop();
 }

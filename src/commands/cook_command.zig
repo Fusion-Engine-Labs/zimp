@@ -118,7 +118,7 @@ pub const CookCommand = struct {
         errdefer allocator.destroy(pr);
 
         pr.* = ProjectRoot.open(allocator, io, project_path) catch |err| {
-            log.err("cook: failed to open project '{s}': {s}. The directory must contain .zephyr/zephyr.proj", .{ project_path, @errorName(err) });
+            log.err("cook: failed to open project '{s}': {s}. The directory must contain .fusion/fusion.proj", .{ project_path, @errorName(err) });
             return CookError.ProjectOpenFailed;
         };
         errdefer pr.deinit();
@@ -395,7 +395,7 @@ test "project cook derives stable ids" {
 
     try runProjectCook(root_path);
 
-    const manifest_bytes_1 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
+    const manifest_bytes_1 = try tmp.dir.readFileAlloc(testing.io, ".fusion/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_1);
 
     var m1 = try manifest_codec.decode(testing.allocator, manifest_bytes_1);
@@ -425,20 +425,20 @@ test "project cook derives stable ids" {
         try testing.expectEqual(builtin_source.hashBytes(), entry.content_hash);
         try testing.expectEqual(@as(u64, builtin_source.bytes.len), entry.source_size);
         try testing.expect(!entry.generated);
-        const cooked_path = try std.fs.path.join(testing.allocator, &.{ ".zephyr/cooked", entry.cooked_path });
+        const cooked_path = try std.fs.path.join(testing.allocator, &.{ ".fusion/cooked", entry.cooked_path });
         defer testing.allocator.free(cooked_path);
         try tmp.dir.access(testing.io, cooked_path, .{});
     }
 
     try runProjectCook(root_path);
-    const manifest_bytes_2 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
+    const manifest_bytes_2 = try tmp.dir.readFileAlloc(testing.io, ".fusion/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_2);
     try testing.expectEqualStrings(manifest_bytes_1, manifest_bytes_2);
 
-    try tmp.dir.deleteFile(testing.io, ".zephyr/assets.zmanifest");
-    try tmp.dir.deleteTree(testing.io, ".zephyr/cooked");
+    try tmp.dir.deleteFile(testing.io, ".fusion/assets.zmanifest");
+    try tmp.dir.deleteTree(testing.io, ".fusion/cooked");
     try runProjectCook(root_path);
-    const manifest_bytes_3 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
+    const manifest_bytes_3 = try tmp.dir.readFileAlloc(testing.io, ".fusion/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_3);
     var m3 = try manifest_codec.decode(testing.allocator, manifest_bytes_3);
     defer m3.deinit();
@@ -460,7 +460,7 @@ test "project cook derives stable ids" {
 
     const manifest_bytes_4 = try tmp.dir.readFileAlloc(
         testing.io,
-        ".zephyr/assets.zmanifest",
+        ".fusion/assets.zmanifest",
         testing.allocator,
         .limited(1 << 20),
     );

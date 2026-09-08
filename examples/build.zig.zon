@@ -13,6 +13,6 @@
         "build.zig.zon",
         "src",
         "assets",
-        ".zephyr",
+        ".fusion",
     },
 }
