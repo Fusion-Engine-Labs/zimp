@@ -156,8 +156,8 @@ test "builtin entries are cloned, sorted, with project entries" {
     const builtin_entries = [_]model.AssetManifestEntry{.{
         .id = builtin_id,
         .kind = .shader_stage,
-        .source_path = "zephyr/standard.vert",
-        .cooked_path = "zephyr/standard.vert.zshdr",
+        .source_path = "fusion/standard.vert",
+        .cooked_path = "fusion/standard.vert.zshdr",
         .content_hash = 123,
         .source_size = 456,
         .cooked_size = 789,
@@ -171,7 +171,7 @@ test "builtin entries are cloned, sorted, with project entries" {
 
     try testing.expectEqual(@as(usize, 2), m.entries.len);
     try testing.expectEqual(@as(usize, 1), stats.builtin_entries);
-    const entry = m.findBySourcePath("zephyr/standard.vert").?;
+    const entry = m.findBySourcePath("fusion/standard.vert").?;
     try testing.expect(entry.id.eql(builtin_id));
     try testing.expectEqual(@as(u64, 123), entry.content_hash);
 }
@@ -283,8 +283,8 @@ test "builtin collision with a project id is rejected" {
     const builtins = [_]model.AssetManifestEntry{.{
         .id = collision_id,
         .kind = .shader_stage,
-        .source_path = "zephyr/collision.vert",
-        .cooked_path = "zephyr/collision.vert.zshdr",
+        .source_path = "fusion/collision.vert",
+        .cooked_path = "fusion/collision.vert.zshdr",
         .content_hash = 0,
         .source_size = 0,
         .cooked_size = 0,

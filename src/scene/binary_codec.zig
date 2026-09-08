@@ -448,7 +448,7 @@ test "JSON source and cooked binary decode to equivalent documents" {
     const json_codec = @import("json_codec.zig");
     const testing = std.testing;
     const input =
-        \\{"format":"zephyr.scene","version":2,"scene_id":"8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a","project_id":"4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589","name":"Sandbox","entities":[{"id":"00000000-0000-4000-8000-000000000001","name":"Camera","components":[{"type_id":"11111111-1111-4111-8111-111111111111","version":1,"fields":[{"number":1,"value":{"kind":"string","value":"main"}}]}]}]}
+        \\{"format":"fusion.scene","version":2,"scene_id":"8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a","project_id":"4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589","name":"Sandbox","entities":[{"id":"00000000-0000-4000-8000-000000000001","name":"Camera","components":[{"type_id":"11111111-1111-4111-8111-111111111111","version":1,"fields":[{"number":1,"value":{"kind":"string","value":"main"}}]}]}]}
     ;
     var source = try json_codec.decode(testing.allocator, input);
     defer source.deinit();

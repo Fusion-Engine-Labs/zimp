@@ -6,7 +6,7 @@ const AssetId = @import("../id/id_types.zig").AssetId;
 const kind_mod = @import("../assets/asset.zig");
 const model = @import("model.zig");
 
-pub const manifest_format = "zephyr.asset_manifest";
+pub const manifest_format = "fusion.asset_manifest";
 pub const manifest_version: u32 = 1;
 pub const max_manifest_bytes: usize = 64 * 1024 * 1024;
 
@@ -187,10 +187,10 @@ test "decode rejects wrong format, future version, and garbage" {
         \\{"format":"nope","version":1,"project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4","entries":[]}
     ));
     try testing.expectError(error.UnsupportedManifestVersion, decode(testing.allocator,
-        \\{"format":"zephyr.asset_manifest","version":99,"project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4","entries":[]}
+        \\{"format":"fusion.asset_manifest","version":99,"project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4","entries":[]}
     ));
     try testing.expectError(error.UnknownAssetKind, decode(testing.allocator,
-        \\{"format":"zephyr.asset_manifest","version":1,"project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4",
+        \\{"format":"fusion.asset_manifest","version":1,"project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4",
         \\ "entries":[{"id":"3f2a77f1-9c44-4b7e-9b1a-2f6c1d8e5a01","kind":"blob","source_path":"a","cooked_path":"a",
         \\             "content_hash":0,"source_size":0,"cooked_size":0}]}
     ));
@@ -198,7 +198,7 @@ test "decode rejects wrong format, future version, and garbage" {
 
 test "decode tolerates unknown fields from newer writers" {
     var m = try decode(testing.allocator,
-        \\{"format":"zephyr.asset_manifest","version":1,
+        \\{"format":"fusion.asset_manifest","version":1,
         \\ "project_id":"b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4",
         \\ "some_future_field": 42,
         \\ "entries":[]}

@@ -44,7 +44,7 @@ pub const SceneDocument = struct {
         errdefer self.arena.deinit();
 
         const storage = self.arena.allocator();
-        self.format = try storage.dupe(u8, "zephyr.scene");
+        self.format = try storage.dupe(u8, "fusion.scene");
         self.name = try storage.dupe(u8, name);
 
         return self;
@@ -239,7 +239,7 @@ test "SceneDocument.clone preserves document data in independent storage" {
         .prefab = .{ .prefab_asset = asset_id, .source_entity = parent_id },
     }});
     source.version = 7;
-    source.format = try storage.dupe(u8, "zephyr.scene.test");
+    source.format = try storage.dupe(u8, "fusion.scene.test");
     source.schema_hash = 123;
     source.asset_manifest_hash = 456;
 

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const AssetId = @import("../id/id_types.zig").AssetId;
 
-pub const PREFIX = "zephyr/";
+pub const PREFIX = "fusion/";
 
 pub const Source = struct {
     path: []const u8,
@@ -40,7 +40,7 @@ pub fn find(file_path: []const u8) ?Source {
 pub fn idFor(file_path: []const u8) AssetId {
     @setEvalBranchQuota(1750);
     var hasher = std.crypto.hash.Blake3.init(.{});
-    hasher.update("zephyr.builtin.v1:");
+    hasher.update("fusion.builtin.v1:");
     hasher.update(file_path);
     var out: [16]u8 = undefined;
     hasher.final(&out);
@@ -88,9 +88,9 @@ test "all builtin assets are valid and cookable" {
 }
 
 test "builtin ids are deterministic" {
-    const first = idFor("zephyr/standard.vert");
-    const second = idFor("zephyr/standard.vert");
-    const fragment = idFor("zephyr/standard.frag");
+    const first = idFor("fusion/standard.vert");
+    const second = idFor("fusion/standard.vert");
+    const fragment = idFor("fusion/standard.frag");
 
     try testing.expect(first.eql(second));
     try testing.expect(!first.eql(fragment));

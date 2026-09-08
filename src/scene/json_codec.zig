@@ -4,7 +4,7 @@ const value = @import("value.zig");
 const id = @import("../id/id_types.zig");
 const Uuid = @import("../id/uuid.zig").Uuid;
 
-pub const scene_format = "zephyr.scene";
+pub const scene_format = "fusion.scene";
 pub const scene_version: u32 = 2;
 pub const max_scene_bytes: usize = 64 * 1024 * 1024;
 

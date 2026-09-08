@@ -1,14 +1,14 @@
-# zimp (Zephyr Asset Compiler- IN DEVELOPMENT)
+# zimp (Fusion Asset Compiler- IN DEVELOPMENT)
 
 A build-time asset compiler for Zig 0.16 that converts source assets into GPU-optimized binary formats, maintains durable asset identity, and generates the asset manifest the engine resolves assets through at runtime.
 
-Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but fully standalone — usable in any Zig project that needs an offline asset pipeline.
+Designed for the [Fusion Game Engine](https://github.com/Fusion-Engine) but fully standalone — usable in any Zig project that needs an offline asset pipeline.
 
 ## Features
 
 - **Build-time cooking** — converts source assets (glTF/GLB, OBJ, PNG/JPG/HDR, GLSL, TOML materials) into flat binary formats optimized for direct GPU upload.
 - **Asset manifest** — project cooks emit `assets.zmanifest`, a deterministic database mapping `AssetId` → source path, cooked path, kind, and content hash. The runtime resolves assets through it instead of hard-coded paths.
-- **Project mode** — `zimp cook --project <root>` reads `.zephyr/zephyr.proj` and derives all directories from the project manifest; no hand-wired source/output paths.
+- **Project mode** — `zimp cook --project <root>` reads `.fusion/fusion.proj` and derives all directories from the project manifest; no hand-wired source/output paths.
 - **SoA mesh layout** — vertex streams stored separately (positions, normals, UVs) so the engine binds only what each render pass needs.
 - **Vertex quantization** — octahedral normals (`[2]i16`), `f16` tangents, normalized `u16` UVs, `u16` indices where they fit.
 - **Texture classification** — automatic format selection (BC7/BC5/BC4) from filename convention (`*_albedo`, `*_normal`, ...) and material slot.
@@ -60,7 +60,7 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 Add zimp as a dependency in your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/Zephyr-Engine/zimp.git
+zig fetch --save git+https://github.com/Fusion-Engine/zimp.git
 ```
 
 Then in your `build.zig`, cook the project as a build step:
@@ -73,7 +73,7 @@ const zimp_dep = b.dependency("zimp", .{
     .optimize = .ReleaseFast,
 });
 
-// Project root = the directory containing .zephyr/zephyr.proj.
+// Project root = the directory containing .fusion/fusion.proj.
 const cook = zimp.addProjectCookStep(b, zimp_dep, b.path("."));
 const cook_step = b.step("cook", "Cook assets with zimp");
 cook_step.dependOn(&cook.step);
@@ -90,7 +90,7 @@ zig build run -- <command> [flags]
 
 ### Cook a project (recommended)
 
-Reads `.zephyr/zephyr.proj`, cooks `assets_dir` into `cooked_assets_dir`, resolves durable ids, and writes `assets.zmanifest`:
+Reads `.fusion/fusion.proj`, cooks `assets_dir` into `cooked_assets_dir`, resolves durable ids, and writes `assets.zmanifest`:
 
 ```sh
 zimp cook --project path/to/project
@@ -98,7 +98,7 @@ zimp cook --project path/to/project
 
 ### Cook a bare directory
 
-Directory mode cooks without a project: no identity, no manifest. Useful for ad-hoc conversion; the Zephyr runtime requires a manifest and will not load from a dir-mode cook.
+Directory mode cooks without a project: no identity, no manifest. Useful for ad-hoc conversion; the Fusion runtime requires a manifest and will not load from a dir-mode cook.
 
 ```sh
 zimp cook --source assets/ --output cooked/
@@ -117,7 +117,7 @@ zimp inspect cooked/monkey.zmesh
 zimp inspect cooked/basic.vert.zshdr
 zimp inspect cooked/monkey.zamat
 zimp inspect cooked/.zcache          # directory mode
-zimp inspect .zephyr/.zcache         # project mode
+zimp inspect .fusion/.zcache         # project mode
 ```
 
 ## Running tests
@@ -258,7 +258,7 @@ When `.glb` or `.gltf` files contain materials, zimp auto-generates material sou
 
 ## Incremental builds
 
-zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. Project mode stores it at `<project>/.zephyr/.zcache`; directory mode stores it inside the selected output directory. This keeps independent projects and output roots from sharing mutable cache state. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
+zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. Project mode stores it at `<project>/.fusion/.zcache`; directory mode stores it inside the selected output directory. This keeps independent projects and output roots from sharing mutable cache state. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
 
 ```sh
 # First run: cooks everything

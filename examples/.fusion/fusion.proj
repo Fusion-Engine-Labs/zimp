@@ -1,12 +1,12 @@
 {
-  "format": "zephyr.proj",
+  "format": "fusion.proj",
   "version": 1,
   "name": "zimp examples",
   "project_id": "bf5a424f-e93e-4977-9a7a-0c522318dfdc",
   "assets_dir": "assets",
-  "scenes_dir": ".zephyr/scenes",
-  "generated_dir": ".zephyr",
+  "scenes_dir": ".fusion/scenes",
+  "generated_dir": ".fusion",
   "cooked_assets_dir": "output",
-  "asset_manifest": ".zephyr/assets.zmanifest",
+  "asset_manifest": ".fusion/assets.zmanifest",
   "default_scene": null
 }

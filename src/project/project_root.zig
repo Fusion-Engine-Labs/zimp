@@ -15,7 +15,7 @@ pub const ProjectRoot = struct {
     root_dir: std.Io.Dir,
     manifest: ProjectManifest,
 
-    /// `root_fs_path` is the directory that contains `.zephyr/zephyr.proj`.
+    /// `root_fs_path` is the directory that contains `.fusion/fusion.proj`.
     pub fn open(
         gpa: std.mem.Allocator,
         io: std.Io,
@@ -94,13 +94,13 @@ test "ProjectRoot opens a project and resolves manifest directories" {
     defer cooked.close(testing.io);
     try cooked.writeFile(testing.io, .{ .sub_path = "probe.bin", .data = "x" });
 
-    const probe = try tmp.dir.readFileAlloc(testing.io, ".zephyr/cooked/probe.bin", testing.allocator, .limited(16));
+    const probe = try tmp.dir.readFileAlloc(testing.io, ".fusion/cooked/probe.bin", testing.allocator, .limited(16));
     defer testing.allocator.free(probe);
     try testing.expectEqualStrings("x", probe);
 
     const resolved = try root.resolve(testing.allocator, root.manifest.asset_manifest);
     defer testing.allocator.free(resolved);
-    try testing.expect(std.mem.endsWith(u8, resolved, ".zephyr/assets.zmanifest"));
+    try testing.expect(std.mem.endsWith(u8, resolved, ".fusion/assets.zmanifest"));
 }
 
 test "ProjectRoot.open fails on a directory without a manifest" {

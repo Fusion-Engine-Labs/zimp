@@ -5,7 +5,7 @@ zig-pkg/
 examples/output/*
 !examples/output/.gitkeep
 examples/assets/generated/
-examples/.zephyr/assets.zmanifest
+examples/.fusion/assets.zmanifest
 .DS_Store
 .zcache
 .perf/

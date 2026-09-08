@@ -970,7 +970,7 @@ test "generateFromGltf creates a default slot material when gltf has no material
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
     defer testing.allocator.free(bytes);
-    try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"zephyr/standard\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"fusion/standard\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 1, 1, 1]") != null);
