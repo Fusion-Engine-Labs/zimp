@@ -20,7 +20,8 @@ pub const Value = union(enum) {
     entity_ref: SceneEntityId,
     none,
 
-    pub fn kindMatches(self: Value, kind: FieldKind) bool {
+    /// Accepts a full `FieldKind` as well: a tagged union coerces to its tag.
+    pub fn kindMatches(self: Value, kind: std.meta.Tag(FieldKind)) bool {
         return switch (self) {
             .bool => kind == .bool,
             .i32 => kind == .i32,
@@ -81,13 +82,13 @@ test "Value.kindMatches maps values to schema field kinds" {
     try testing.expect((Value{ .bool = true }).kindMatches(.bool));
     try testing.expect((Value{ .i32 = -1 }).kindMatches(.i32));
     try testing.expect((Value{ .u32 = 1 }).kindMatches(.u32));
-    try testing.expect((Value{ .u32 = 1 }).kindMatches(.{ .enum_ref = enum_schema }));
+    try testing.expect((Value{ .u32 = 1 }).kindMatches(FieldKind{ .enum_ref = enum_schema }));
     try testing.expect((Value{ .f32 = 1.5 }).kindMatches(.f32));
     try testing.expect((Value{ .string = "name" }).kindMatches(.string));
     try testing.expect((Value{ .vec2 = .{ 1, 2 } }).kindMatches(.vec2));
     try testing.expect((Value{ .vec3 = .{ 1, 2, 3 } }).kindMatches(.vec3));
     try testing.expect((Value{ .quat = .{ 0, 0, 0, 1 } }).kindMatches(.quat));
-    try testing.expect((Value{ .asset_ref = AssetId.zero }).kindMatches(.{ .asset_ref = .texture }));
+    try testing.expect((Value{ .asset_ref = AssetId.zero }).kindMatches(FieldKind{ .asset_ref = .texture }));
     try testing.expect((Value{ .entity_ref = SceneEntityId.zero }).kindMatches(.entity_ref));
 }
 
