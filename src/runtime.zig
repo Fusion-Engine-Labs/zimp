@@ -5,21 +5,27 @@ const shader_format = @import("formats/zshdr.zig");
 const material_format = @import("formats/zamat.zig");
 const path_helpers = @import("path.zig");
 const wire = @import("shared/wire.zig");
+const file_read = @import("shared/file_read.zig");
 pub const AssetKind = @import("assets/asset.zig").AssetKind;
 
-pub const Asset = union(enum) {
+/// Zero-copy view of a cooked asset. Every slice inside points into the
+/// buffer the view was created from.
+pub const AssetView = union(enum) {
     mesh: mesh_format.ZMesh,
     texture: texture_format.Zatex,
     shader: shader_format.ZShader,
     material: material_format.Zamat,
+};
+
+/// A loaded cooked asset: one aligned allocation holding the file bytes plus
+/// a view into it.
+pub const Asset = struct {
+    bytes: []align(wire.section_alignment) u8,
+    view: AssetView,
 
     pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .mesh => |*m| m.deinit(allocator),
-            .texture => |*t| t.deinit(allocator),
-            .shader => |*s| s.deinit(allocator),
-            .material => |*m| m.deinit(allocator),
-        }
+        allocator.free(self.bytes);
+        self.* = undefined;
     }
 };
 
@@ -46,14 +52,15 @@ pub const CookedStore = struct {
         allocator.free(self.root);
     }
 
+    /// Reads a cooked file into a buffer suitable for `viewBytes`.
     pub fn readAlloc(
         self: *CookedStore,
         allocator: std.mem.Allocator,
         io: std.Io,
         normalized_path: []const u8,
-    ) ![]u8 {
+    ) ![]align(wire.section_alignment) u8 {
         try path_helpers.validateVirtual(normalized_path);
-        return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(wire.max_asset_bytes));
+        return file_read.readFileAligned(allocator, io, self.dir, normalized_path);
     }
 };
 
@@ -61,31 +68,28 @@ pub fn detectKind(path: []const u8) ?AssetKind {
     return AssetKind.fromCookedPath(path);
 }
 
+/// Loads a cooked asset with a single read into an aligned buffer and
+/// validates it in place. No per-field parsing or per-stream allocation.
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Asset {
     const normalized_path = try path_helpers.normalizeVirtual(allocator, path);
     defer allocator.free(normalized_path);
 
     const asset_kind = detectKind(normalized_path) orelse return error.UnsupportedAssetType;
 
-    const file = try dir.openFile(io, normalized_path, .{});
-    defer file.close(io);
-
-    var buf: [8192]u8 = undefined;
-    var file_reader = file.reader(io, &buf);
-    return loadFromReader(allocator, &file_reader.interface, asset_kind);
+    const bytes = try file_read.readFileAligned(allocator, io, dir, normalized_path);
+    errdefer allocator.free(bytes);
+    return .{ .bytes = bytes, .view = try viewBytes(bytes, asset_kind) };
 }
 
-pub fn loadFromReader(
-    allocator: std.mem.Allocator,
-    reader: *std.Io.Reader,
-    asset_kind: AssetKind,
-) !Asset {
-    switch (asset_kind) {
-        .mesh => return .{ .mesh = try mesh_format.read(allocator, reader) },
-        .texture => return .{ .texture = try texture_format.read(allocator, reader) },
-        .shader_stage => return .{ .shader = try shader_format.read(allocator, reader) },
-        .material => return .{ .material = try material_format.read(allocator, reader) },
-    }
+/// Validates `bytes` as a cooked asset of `asset_kind` and returns a view
+/// borrowing them. Works on heap buffers and memory maps alike.
+pub fn viewBytes(bytes: wire.Bytes, asset_kind: AssetKind) !AssetView {
+    return switch (asset_kind) {
+        .mesh => .{ .mesh = try mesh_format.view(bytes) },
+        .texture => .{ .texture = try texture_format.view(bytes) },
+        .shader_stage => .{ .shader = try shader_format.view(bytes) },
+        .material => .{ .material = try material_format.view(bytes) },
+    };
 }
 
 const testing = std.testing;
@@ -101,42 +105,30 @@ test "detectKind requires lowercase cooked extensions" {
     try testing.expect(detectKind("MONKEY.ZMESH") == null);
 }
 
-test "loadFromFile loads zmesh" {
-    const mesh_mod = @import("assets/cooked/mesh.zig");
-    const raw_mesh = @import("assets/raw/mesh.zig");
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const verts = [_]mesh_mod.CookedVertex{
-        .{ .position = .{ 0, 0, 0 }, .normal = null, .tangent = null, .uv0 = null, .uv1 = null, .joint_indices = null, .joint_weights = null },
-        .{ .position = .{ 1, 0, 0 }, .normal = null, .tangent = null, .uv0 = null, .uv1 = null, .joint_indices = null, .joint_weights = null },
-        .{ .position = .{ 0, 1, 0 }, .normal = null, .tangent = null, .uv0 = null, .uv1 = null, .joint_indices = null, .joint_weights = null },
-    };
-    const cooked = mesh_mod.CookedMesh{
-        .vertices = @constCast(&verts),
-        .indices = .{ .u16 = @constCast(&[_]u16{ 0, 1, 2 }), .u32 = null },
-        .submeshes = @constCast(&[_]raw_mesh.RawSubmesh{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}),
-        .format_flags = .{},
-        .bounds = .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } },
-        .name = null,
-    };
-
-    const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
+fn writeTestMesh(dir: std.Io.Dir) !void {
+    const file = try dir.createFile(testing.io, "test.zmesh", .{});
+    defer file.close(testing.io);
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    const parts = [_]mesh_format.ZMesh.CookPart{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
-    const material_slots = [_][]const u8{"materials/test.zamat"};
-    try mesh_format.write(&writer.interface, &material_slots, &parts);
+    try mesh_format.writeTestZmeshFile(&writer.interface);
     try writer.flush();
-    file.close(testing.io);
+}
+
+test "loadFromFile loads zmesh as an in-place view" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeTestMesh(tmp.dir);
 
     var asset = try loadFromFile(testing.allocator, testing.io, tmp.dir, "test.zmesh");
     defer asset.deinit(testing.allocator);
 
-    try testing.expect(asset == .mesh);
-    try testing.expectEqual(@as(usize, 1), asset.mesh.parts.len);
-    try testing.expectEqual(@as(u32, 3), asset.mesh.parts[0].mesh.vertex_count);
+    try testing.expect(asset.view == .mesh);
+    const model = asset.view.mesh;
+    try testing.expectEqual(@as(usize, 1), model.partCount());
+    const positions = model.part(0).mesh.positions;
+    try testing.expectEqual(@as(usize, 3), positions.len);
+    const offset = @intFromPtr(positions.ptr) - @intFromPtr(asset.bytes.ptr);
+    try testing.expect(offset < asset.bytes.len);
 }
 
 test "loadFromFile rejects unknown extension" {
@@ -146,35 +138,20 @@ test "loadFromFile rejects unknown extension" {
     try testing.expectError(error.UnsupportedAssetType, loadFromFile(testing.allocator, testing.io, tmp.dir, "unknown.xyz"));
 }
 
-test "Asset deinit frees resources" {
-    const mesh_mod = @import("assets/cooked/mesh.zig");
-    const raw_mesh = @import("assets/raw/mesh.zig");
-
+test "loadFromFile frees the buffer when validation fails" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "bad.zmesh", .data = "not a mesh at all" });
 
-    const verts = [_]mesh_mod.CookedVertex{
-        .{ .position = .{ 0, 0, 0 }, .normal = null, .tangent = null, .uv0 = null, .uv1 = null, .joint_indices = null, .joint_weights = null },
-    };
-    const cooked = mesh_mod.CookedMesh{
-        .vertices = @constCast(&verts),
-        .indices = .{ .u16 = @constCast(&[_]u16{0}), .u32 = null },
-        .submeshes = @constCast(&[_]raw_mesh.RawSubmesh{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}),
-        .format_flags = .{},
-        .bounds = .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } },
-        .name = null,
-    };
+    try testing.expectError(error.InvalidMagic, loadFromFile(testing.allocator, testing.io, tmp.dir, "bad.zmesh"));
+}
 
-    const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
-    var buf: [4096]u8 = undefined;
-    var writer = file.writer(testing.io, &buf);
-    const parts = [_]mesh_format.ZMesh.CookPart{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
-    const material_slots = [_][]const u8{"materials/test.zamat"};
-    try mesh_format.write(&writer.interface, &material_slots, &parts);
-    try writer.flush();
-    file.close(testing.io);
+test "viewBytes dispatches on asset kind" {
+    var buf: [1024]u8 align(wire.section_alignment) = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try mesh_format.writeTestZmeshFile(&writer);
 
-    var asset = try loadFromFile(testing.allocator, testing.io, tmp.dir, "test.zmesh");
-    asset.deinit(testing.allocator);
-    // deinit should not crash
+    const view = try viewBytes(buf[0..writer.end], .mesh);
+    try testing.expectEqualStrings("materials/test.zamat", view.mesh.materialSlot(0));
+    try testing.expectError(error.InvalidMagic, viewBytes(buf[0..writer.end], .texture));
 }

@@ -34,3 +34,10 @@ and 384 dependency-only files. For the
 original heavier stress size, add
 `--texture-size 2048 --mesh-grid 384 --materials 32 --include-depth 24`
 `--instances 512 --metadata-assets 1000 --scene-entities 10000` after `--`.
+
+With `--load-bench` (passed automatically by `zig build perf`), every cold
+sample is also load-benchmarked: `zimp-load-bench` (`load_bench.zig`) loads
+each cooked file through `runtime.loadFromFile` repeatedly, after a warm-up
+pass, and the suite reports median pass time, per-file cost, and throughput
+per asset kind. The suite also breaks down cooked output bytes per kind. See
+`PERFORMANCE.md` for the baseline and per-item before/after numbers.

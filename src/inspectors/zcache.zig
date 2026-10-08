@@ -5,6 +5,7 @@ const FormatInspector = @import("inspect.zig").FormatInspector;
 const cache = @import("../cache/cache.zig");
 const AssetKind = @import("../assets/asset.zig").AssetKind;
 const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
+const wire = @import("../shared/wire.zig");
 
 fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
     @memcpy(buf[0..s.len], s);
@@ -13,7 +14,9 @@ fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
     return buf[0 .. s.len + pad];
 }
 
-fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
+fn inspectZCache(allocator: std.mem.Allocator, bytes: wire.Bytes) !void {
+    var fixed_reader = std.Io.Reader.fixed(bytes);
+    const reader = &fixed_reader;
     var magic: [cache.MAGIC.len]u8 = undefined;
     try reader.readSliceAll(&magic);
     if (!std.mem.eql(u8, &magic, cache.MAGIC)) return error.InvalidMagic;
@@ -142,18 +145,17 @@ const testing = std.testing;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZCache), insp.inspect_fn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, wire.Bytes) anyerror!void, inspectZCache), insp.inspect_fn);
 }
 
 test "inspector can be called through FormatInspector trait" {
     const insp = inspector();
 
-    var buf: [4096]u8 = undefined;
+    var buf: [4096]u8 align(wire.section_alignment) = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestZcache(&writer, .{});
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
-    try insp.inspect(testing.allocator, &reader);
+    try insp.inspect(testing.allocator, buf[0..writer.end]);
 }
 
 test "Cache.read parses a valid zcache" {
@@ -248,12 +250,11 @@ test "Cache.read parses entry fields correctly" {
 }
 
 test "inspectZCache runs without error on valid zcache" {
-    var buf: [4096]u8 = undefined;
+    var buf: [4096]u8 align(wire.section_alignment) = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestZcache(&writer, .{});
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
-    try inspectZCache(testing.allocator, &reader);
+    try inspectZCache(testing.allocator, buf[0..writer.end]);
 }
 
 const TestZcacheOpts = struct {

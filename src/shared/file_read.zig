@@ -1,4 +1,5 @@
 const std = @import("std");
+const wire = @import("wire.zig");
 
 /// Read granularity. Every caller used the same value, so it is fixed here
 /// rather than threaded through as an option.
@@ -44,7 +45,45 @@ pub fn readFileAllocChunked(
     return bytes;
 }
 
+/// Read a whole cooked asset into a buffer aligned for in-place format views,
+/// using one positional read. The caller owns the result.
+pub fn readFileAligned(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    dir: std.Io.Dir,
+    path: []const u8,
+) ![]align(wire.section_alignment) u8 {
+    const file = try dir.openFile(io, path, .{});
+    defer file.close(io);
+
+    const size = try file.length(io);
+    if (size > wire.max_asset_bytes) return error.AssetTooLarge;
+
+    const bytes = try allocator.alignedAlloc(u8, wire.alignment, @intCast(size));
+    errdefer allocator.free(bytes);
+    if (try file.readPositionalAll(io, bytes, 0) != bytes.len) return error.UnexpectedEndOfStream;
+    return bytes;
+}
+
+/// Drain `reader` into a buffer aligned for in-place format views.
+pub fn readAllAligned(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]align(wire.section_alignment) u8 {
+    return reader.allocRemainingAlignedSentinel(allocator, .limited(wire.max_asset_bytes), wire.alignment, null);
+}
+
 const testing = std.testing;
+
+test "readFileAligned returns aligned file contents" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.bin", .data = "aligned bytes" });
+
+    const bytes = try readFileAligned(testing.allocator, testing.io, tmp.dir, "a.bin");
+    defer testing.allocator.free(bytes);
+
+    try testing.expectEqualStrings("aligned bytes", bytes);
+    try testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % wire.section_alignment);
+}
 
 test "readFileAllocChunked reads file content" {
     var tmp = testing.tmpDir(.{});

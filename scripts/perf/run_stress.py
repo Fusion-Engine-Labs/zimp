@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to the zimp executable built by Zig (default: zig-out/bin/zimp).",
     )
     parser.add_argument(
+        "--load-bench",
+        default=None,
+        help="Path to the zimp-load-bench executable. When given, cold-cook outputs are also load-benchmarked.",
+    )
+    parser.add_argument(
         "--work-dir",
         default=".perf/zimp-stress",
         help="Directory used for generated sources, outputs, and results.",
@@ -536,8 +541,33 @@ def print_results(scenarios: dict[str, dict[str, Any]]) -> None:
                 f"{metric_median(scenario, 'changed_cooked_files'):.0f}",
             )
             for name, scenario in scenarios.items()
+            if name != "load"
         ],
     )
+    by_kind = scenarios["cold"]["aggregate"].get("cooked_by_kind")
+    if by_kind:
+        print("\nCOOKED OUTPUT BY KIND (cold)")
+        print_table(
+            ("Kind", "Files", "Bytes"),
+            [(kind, f"{stats['files']['median']:.0f}", format_bytes(stats["bytes"]["median"])) for kind, stats in by_kind.items()],
+        )
+    load = scenarios.get("load")
+    if load:
+        print("\nLOAD (runtime.loadFromFile over the cold output, warm page cache)")
+        print_table(
+            ("Kind", "Files", "Bytes", "Pass median", "Per file", "Throughput"),
+            [
+                (
+                    kind,
+                    f"{stats['files']['median']:.0f}",
+                    format_bytes(stats["bytes"]["median"]),
+                    format_duration(stats["median_pass_ns"]["median"]),
+                    format_duration(stats["us_per_file"]["median"] * 1000),
+                    f"{stats['gb_per_s']['median']:.2f} GB/s",
+                )
+                for kind, stats in load["aggregate"].items()
+            ],
+        )
     cold_total = metric_median(scenarios["cold"], "wall_ns")
     warm_total = metric_median(scenarios["warm_noop"], "wall_ns")
     invalidated_total = metric_median(scenarios["one_file_invalidation"], "wall_ns")
@@ -591,6 +621,32 @@ def add_output_snapshot(result: dict[str, Any], before: dict[str, tuple[int, int
     result["cooked_output_bytes"] = sum(size for size, _ in after.values())
     result["cooked_output_files"] = len(after)
     result["changed_cooked_files"] = sum(1 for path, stat in after.items() if before.get(path) != stat)
+    by_kind: dict[str, dict[str, int]] = {}
+    for path, (size, _) in after.items():
+        kind = by_kind.setdefault(Path(path).suffix.lstrip(".") or "(none)", {"bytes": 0, "files": 0})
+        kind["bytes"] += size
+        kind["files"] += 1
+    result["cooked_by_kind"] = by_kind
+    return result
+
+
+def run_load_bench(load_bench: Path, output: Path) -> dict[str, Any]:
+    """Load every cooked asset through zimp's runtime loader; see load_bench.zig."""
+    process = subprocess.run([str(load_bench), str(output)], text=True, capture_output=True, check=False)
+    if process.returncode != 0:
+        print(process.stdout + "\n" + process.stderr, file=sys.stderr)
+        raise RuntimeError(f"load bench returned {process.returncode}")
+    result: dict[str, Any] = {}
+    for line in process.stdout.splitlines():
+        row = json.loads(line)
+        median_ns = row["median_pass_ns"]
+        result[row["kind"]] = {
+            "files": row["files"],
+            "bytes": row["bytes"],
+            "median_pass_ns": median_ns,
+            "us_per_file": median_ns / 1000 / row["files"],
+            "gb_per_s": row["bytes"] / median_ns if median_ns else 0.0,
+        }
     return result
 
 
@@ -629,6 +685,13 @@ def main() -> int:
         zimp = repo_root / zimp
     if not zimp.is_file():
         raise SystemExit(f"zimp executable not found: {zimp}. Run through 'zig build perf'.")
+    load_bench = None
+    if args.load_bench:
+        load_bench = Path(args.load_bench)
+        if not load_bench.is_absolute():
+            load_bench = repo_root / load_bench
+        if not load_bench.is_file():
+            raise SystemExit(f"load bench executable not found: {load_bench}. Run through 'zig build perf'.")
 
     work_dir = Path(args.work_dir)
     if not work_dir.is_absolute():
@@ -659,6 +722,8 @@ def main() -> int:
         sample_root = work_dir / "samples" / f"sample-{index:03d}"
         source, output = prepare_sample(sample_root, fixture_source)
         samples_by_scenario["cold"].append(run_scenario("cold", source, output, zimp))
+        if load_bench is not None:
+            samples_by_scenario.setdefault("load", []).append(run_load_bench(load_bench, output))
         samples_by_scenario["warm_noop"].append(run_scenario("warm_noop", source, output, zimp))
         samples_by_scenario["one_file_invalidation"].append(
             run_scenario("one_file_invalidation", source, output, zimp)
@@ -667,6 +732,7 @@ def main() -> int:
             shutil.rmtree(sample_root)
     for name, samples in samples_by_scenario.items():
         scenarios[name] = {"samples": samples, "aggregate": aggregate_scenario(samples)}
+    load_scenario = scenarios.pop("load", None)
 
     for sample in scenarios["warm_noop"]["samples"]:
         if sample["changed_cooked_files"] != 0:
@@ -675,6 +741,8 @@ def main() -> int:
         if sample["changed_cooked_files"] == 0:
             raise RuntimeError("one-file invalidation sample did not recook affected assets")
 
+    if load_scenario is not None:
+        scenarios["load"] = load_scenario
     print_results(scenarios)
     results = {
         "schema_version": 1,

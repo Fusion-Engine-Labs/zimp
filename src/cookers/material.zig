@@ -363,19 +363,17 @@ test "material cooker writes zamat" {
         \\
     );
 
-    var out: [1024]u8 = undefined;
+    var out: [1024]u8 align(16) = undefined;
     var writer = std.Io.Writer.fixed(&out);
     try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 
     try testing.expectEqualSlices(u8, zamat.MAGIC, out[0..zamat.MAGIC.len]);
 
-    var reader = std.Io.Reader.fixed(out[0..writer.end]);
-    var loaded = try zamat.Zamat.read(testing.allocator, &reader);
-    defer loaded.deinit(testing.allocator);
+    const loaded = try zamat.Zamat.view(out[0..writer.end]);
 
     try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
     try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
-    try testing.expectEqualStrings("textures/missing.ztex", loaded.texture_slots[0].cooked_path);
+    try testing.expectEqualStrings("textures/missing.ztex", loaded.textureSlot(0).cooked_path);
 }
 
 test "material cooker validates builtin standard uniforms without freeing embedded source" {
@@ -526,15 +524,13 @@ test "material cooker selects declared variants from material contents" {
         \\
     );
 
-    var out: [2048]u8 = undefined;
+    var out: [2048]u8 align(16) = undefined;
     var writer = std.Io.Writer.fixed(&out);
     try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 
-    var reader = std.Io.Reader.fixed(out[0..writer.end]);
-    var loaded = try zamat.Zamat.read(testing.allocator, &reader);
-    defer loaded.deinit(testing.allocator);
+    const loaded = try zamat.Zamat.view(out[0..writer.end]);
 
-    try testing.expectEqual(@as(usize, 2), loaded.required_variants.len);
-    try testing.expectEqualStrings("HAS_NORMAL_MAP", loaded.required_variants[0]);
-    try testing.expectEqualStrings("ALPHA_TEST", loaded.required_variants[1]);
+    try testing.expectEqual(@as(usize, 2), loaded.requiredVariantCount());
+    try testing.expectEqualStrings("HAS_NORMAL_MAP", loaded.requiredVariant(0));
+    try testing.expectEqualStrings("ALPHA_TEST", loaded.requiredVariant(1));
 }

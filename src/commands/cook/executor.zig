@@ -21,6 +21,7 @@ const zmesh = @import("../../formats/zmesh.zig");
 const ztex = @import("../../formats/ztex.zig");
 const zshdr = @import("../../formats/zshdr.zig");
 const zamat = @import("../../formats/zamat.zig");
+const wire = @import("../../shared/wire.zig");
 const HashedSource = @import("source_analysis.zig").HashedSource;
 const CookInput = @import("../../cookers/cooker.zig").CookInput;
 
@@ -346,13 +347,14 @@ fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, 
     const file = output.openFile(io, cooked_path, .{}) catch return false;
     defer file.close(io);
 
-    var buf: [16]u8 = undefined;
-    var file_reader = file.reader(io, &buf);
-    var magic: [5]u8 = undefined;
-    file_reader.interface.readSliceAll(&magic) catch return false;
-    const version = file_reader.interface.takeInt(u32, .little) catch return false;
+    var header: wire.FileHeader = undefined;
+    const read = file.readPositionalAll(io, std.mem.asBytes(&header), 0) catch return false;
+    if (read != @sizeOf(wire.FileHeader)) return false;
+    const size = file.length(io) catch return false;
     const expected = currentCookedHeader(asset_kind);
-    return std.mem.eql(u8, &magic, expected.magic) and version == expected.version;
+    return std.mem.eql(u8, &header.magic, expected.magic) and
+        header.version == expected.version and
+        header.total_size == size;
 }
 
 const MetricsAccumulator = struct {
@@ -638,23 +640,20 @@ test "cooked file version mismatch invalidates only that cached output" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(std.testing.io, "mesh.zmesh", .{});
-    var buf: [32]u8 = undefined;
-    var writer = file.writer(std.testing.io, &buf);
-    try writer.interface.writeAll(zmesh.MAGIC);
-    try writer.interface.writeInt(u32, zmesh.ZMESH_VERSION - 1, .little);
-    try writer.interface.flush();
-    file.close(std.testing.io);
-
+    const stale = wire.FileHeader.init(zmesh.MAGIC, zmesh.ZMESH_VERSION - 1, @sizeOf(wire.FileHeader));
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "mesh.zmesh", .data = std.mem.asBytes(&stale) });
     try std.testing.expect(!cookedFileIsCurrent(std.testing.io, tmp.dir, "mesh.zmesh", .mesh));
 
-    const current = try tmp.dir.createFile(std.testing.io, "mesh.zmesh", .{ .truncate = true });
-    var current_buf: [32]u8 = undefined;
-    var current_writer = current.writer(std.testing.io, &current_buf);
-    try current_writer.interface.writeAll(zmesh.MAGIC);
-    try current_writer.interface.writeInt(u32, zmesh.ZMESH_VERSION, .little);
-    try current_writer.interface.flush();
-    current.close(std.testing.io);
-
+    const current = wire.FileHeader.init(zmesh.MAGIC, zmesh.ZMESH_VERSION, @sizeOf(wire.FileHeader));
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "mesh.zmesh", .data = std.mem.asBytes(&current) });
     try std.testing.expect(cookedFileIsCurrent(std.testing.io, tmp.dir, "mesh.zmesh", .mesh));
+}
+
+test "truncated cooked file is not current" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const header = wire.FileHeader.init(zmesh.MAGIC, zmesh.ZMESH_VERSION, 4096);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "mesh.zmesh", .data = std.mem.asBytes(&header) });
+    try std.testing.expect(!cookedFileIsCurrent(std.testing.io, tmp.dir, "mesh.zmesh", .mesh));
 }

@@ -64,10 +64,24 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
 
-    const perf_step = b.step("perf", "Run the local asset-cooking stress suite");
-    const perf_cmd = b.addSystemCommand(&.{ "python3", "scripts/perf/run_stress.py", "--zimp", "zig-out/bin/zimp" });
+    const load_bench = b.addExecutable(.{
+        .name = "zimp-load-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("scripts/perf/load_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zimp", .module = mod },
+            },
+        }),
+    });
+    const install_load_bench = b.addInstallArtifact(load_bench, .{});
+
+    const perf_step = b.step("perf", "Run the local asset-cooking and loading stress suite");
+    const perf_cmd = b.addSystemCommand(&.{ "python3", "scripts/perf/run_stress.py", "--zimp", "zig-out/bin/zimp", "--load-bench", "zig-out/bin/zimp-load-bench" });
     perf_cmd.has_side_effects = true;
     perf_cmd.step.dependOn(b.getInstallStep());
+    perf_cmd.step.dependOn(&install_load_bench.step);
     if (b.args) |args| {
         perf_cmd.addArgs(args);
     }

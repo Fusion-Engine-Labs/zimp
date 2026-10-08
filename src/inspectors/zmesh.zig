@@ -3,34 +3,28 @@ const log = @import("../logger.zig");
 const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const zmesh = @import("../formats/zmesh.zig");
+const wire = @import("../shared/wire.zig");
 
-const SUBMESH_ENTRY_SIZE: u64 = @sizeOf(u32) * 2 + @sizeOf(u16) * 2;
-
-fn inspectZmesh(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
-    var model = try zmesh.read(allocator, reader);
-    defer model.deinit(allocator);
+fn inspectZmesh(_: std.mem.Allocator, bytes: wire.Bytes) !void {
+    const model = try zmesh.view(bytes);
 
     log.info("zmesh v{d}", .{zmesh.ZMESH_VERSION});
-    log.info("Material slots: {d}", .{model.material_slots.len});
-    for (model.material_slots, 0..) |path, i| {
-        log.info("  [{d}] {s}", .{ i, path });
+    log.info("Material slots: {d}", .{model.materialSlotCount()});
+    for (0..model.materialSlotCount()) |i| {
+        log.info("  [{d}] {s}", .{ i, model.materialSlot(i) });
     }
-    log.info("Mesh parts: {d}", .{model.parts.len});
+    log.info("Mesh parts: {d}", .{model.partCount()});
 
-    var total_file_size: u64 = zmesh.MAGIC.len + @sizeOf(u32) * 2 + @sizeOf(u16);
-    for (model.material_slots) |path| total_file_size += @sizeOf(u16) + path.len;
-
-    for (model.parts, 0..) |part, i| {
-        total_file_size += @sizeOf(zmesh.Transform);
-        total_file_size += inspectPart(i, part);
+    for (0..model.partCount()) |i| {
+        inspectPart(i, model.part(i), &model.part_entries[i]);
     }
 
     log.info("", .{});
     var total_buf: [16]u8 = undefined;
-    log.info("Model file size: {s}", .{fmt.formatBytes(&total_buf, total_file_size)});
+    log.info("Model file size: {s}", .{fmt.formatBytes(&total_buf, bytes.len)});
 }
 
-fn inspectPart(index: usize, part: zmesh.ZMesh.Part) u64 {
+fn inspectPart(index: usize, part: zmesh.ZMesh.Part, entry: *const zmesh.PartEntry) void {
     const mesh = part.mesh;
     const index_format = if (mesh.indices_u16 != null) "u16" else "u32";
 
@@ -78,48 +72,29 @@ fn inspectPart(index: usize, part: zmesh.ZMesh.Part) u64 {
         });
     }
 
-    var vertex_bytes: u64 = mesh.positions.len * @sizeOf([3]f32);
-    if (mesh.normals) |values| vertex_bytes += values.len * @sizeOf([2]i16);
-    if (mesh.tangents) |values| vertex_bytes += values.len * @sizeOf([4]f16);
-    if (mesh.uv0) |values| vertex_bytes += values.len * @sizeOf([2]u16);
-    if (mesh.uv1) |values| vertex_bytes += values.len * @sizeOf([2]u16);
-    if (mesh.joint_indices) |values| vertex_bytes += values.len * @sizeOf([4]u16);
-    if (mesh.joint_weights) |values| vertex_bytes += values.len * @sizeOf([4]f16);
-
-    const index_bytes: u64 = if (mesh.indices_u16) |values|
-        values.len * @sizeOf(u16)
-    else if (mesh.indices_u32) |values|
-        values.len * @sizeOf(u32)
-    else
-        0;
-    const index_padding = (4 - (index_bytes % 4)) % 4;
-    const submesh_bytes: u64 = mesh.submeshes.len * SUBMESH_ENTRY_SIZE;
-    const total = zmesh.HEADER_SIZE + vertex_bytes + index_bytes + index_padding + submesh_bytes;
+    var vertex_bytes: u64 = 0;
+    for ([_]wire.Span{ entry.positions, entry.normals, entry.tangents, entry.uv0, entry.uv1, entry.joint_indices, entry.joint_weights }) |span| {
+        vertex_bytes += span.len;
+    }
 
     log.info("", .{});
-    log.info("File Size Summary:", .{});
-    var header_buf: [16]u8 = undefined;
+    log.info("Section Sizes:", .{});
     var vertex_buf: [16]u8 = undefined;
     var index_buf: [16]u8 = undefined;
     var submesh_buf: [16]u8 = undefined;
-    var total_buf: [16]u8 = undefined;
-    log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zmesh.HEADER_SIZE)});
     log.info("  Vertex streams: {s: >10}", .{fmt.formatBytes(&vertex_buf, vertex_bytes)});
-    log.info("  Index buffer:   {s: >10}", .{fmt.formatBytes(&index_buf, index_bytes + index_padding)});
-    log.info("  Submesh table:  {s: >10}", .{fmt.formatBytes(&submesh_buf, submesh_bytes)});
-    log.info("  Total:          {s: >10}", .{fmt.formatBytes(&total_buf, total)});
-    return total;
+    log.info("  Index buffer:   {s: >10}", .{fmt.formatBytes(&index_buf, entry.indices.len)});
+    log.info("  Submesh table:  {s: >10}", .{fmt.formatBytes(&submesh_buf, entry.submeshes.len)});
 }
 
 pub fn inspector() FormatInspector {
     return .{ .inspect_fn = inspectZmesh };
 }
 
-test "inspectZmesh uses the format reader" {
-    var file_buf: [4096]u8 = undefined;
+test "inspectZmesh uses the format view" {
+    var file_buf: [4096]u8 align(wire.section_alignment) = undefined;
     var writer = std.Io.Writer.fixed(&file_buf);
     try zmesh.writeTestZmeshFile(&writer);
 
-    var reader = std.Io.Reader.fixed(file_buf[0..writer.end]);
-    try inspectZmesh(std.testing.allocator, &reader);
+    try inspectZmesh(std.testing.allocator, file_buf[0..writer.end]);
 }

@@ -6,7 +6,7 @@ const RawVertex = raw_mesh.RawVertex;
 pub const UV0Bounds = raw_mesh.UV0Bounds;
 const RawMesh = raw_mesh.RawMesh;
 
-pub const FormatFlags = packed struct {
+pub const FormatFlags = packed struct(u8) {
     has_normals: bool = false,
     has_tangents: bool = false,
     has_uv0: bool = false,

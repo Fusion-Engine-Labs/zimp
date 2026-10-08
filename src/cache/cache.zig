@@ -17,7 +17,7 @@ const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
 const constants = @import("../shared/constants.zig");
 
-pub const VERSION = 6;
+pub const VERSION = 7;
 pub const MAGIC = constants.FORMAT_MAGIC.ZACHE;
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
