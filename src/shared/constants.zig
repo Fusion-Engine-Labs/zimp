@@ -1,7 +1,8 @@
+/// Four-byte file magics. Cooked asset magics are the first field of `wire.FileHeader`.
 pub const FORMAT_MAGIC = struct {
-    pub const ZMESH = "ZMESH";
-    pub const ZACHE = "ZACHE";
-    pub const ZATEX = "ZATEX";
-    pub const ZSHDR = "ZSHDR";
-    pub const ZAMAT = "ZAMAT";
+    pub const ZMESH = "ZMSH";
+    pub const ZACHE = "ZCHE";
+    pub const ZATEX = "ZTEX";
+    pub const ZSHDR = "ZSHD";
+    pub const ZAMAT = "ZMAT";
 };

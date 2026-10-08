@@ -158,22 +158,33 @@ enough to expose meaningful changes without noisy hosted-runner comparisons.
 
 ## Cooked formats
 
+Every cooked file starts with a 16-byte header (4-byte magic, version, exact
+file size, flags) followed by fixed-size `extern struct` tables and 16-byte
+aligned data sections. Loading is one read into an aligned buffer (or an
+mmap) plus validation; the format views return slices that point straight into
+that buffer, with no per-field parsing and no per-stream allocations.
+
+```zig
+const zimp = @import("zimp");
+
+var asset = try zimp.runtime.loadFromFile(allocator, io, dir, "meshes/monkey.zmesh");
+defer asset.deinit(allocator); // frees the single file buffer
+
+// Or view bytes you already hold (aligned to 16):
+const view = try zimp.runtime.viewBytes(bytes, .mesh);
+```
+
 ### Meshes (`.zmesh`)
 
 Source: `.glb`, `.gltf`, `.obj`
 
-Version 2 is a model container made of one or more transformed mesh parts.
+A model container made of one or more transformed mesh parts.
 Each part stores SoA vertex streams that are directly uploadable to the GPU:
 
 ```zig
-const zmesh = @import("zimp").formats.zmesh;
-
-var read_buffer: [8192]u8 = undefined;
-var file_reader = file.reader(io, &read_buffer);
-var mesh = try zmesh.read(allocator, &file_reader.interface);
-defer mesh.deinit(allocator);
-
-for (mesh.parts) |part| {
+const model = asset.view.mesh;
+for (0..model.partCount()) |i| {
+    const part = model.part(i);
     // part.transform is the glTF node's local-to-model matrix.
     upload(part.mesh.positions, part.mesh.indices_u16, part.mesh.indices_u32);
 }

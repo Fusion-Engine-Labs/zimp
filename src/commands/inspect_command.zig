@@ -3,6 +3,8 @@ const string_list = @import("../shared/string_list.zig");
 
 const log = @import("../logger.zig");
 const inspectors = @import("../inspectors/inspect.zig").inspector_registry;
+const file_read = @import("../shared/file_read.zig");
+const magic_len = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH.len;
 
 pub const InspectError = error{
     NotEnoughArguments,
@@ -42,18 +44,16 @@ pub const InspectCommand = struct {
 
         var buf: [8192]u8 = undefined;
         var file_reader = self.file.reader(self.io, &buf);
-        var reader = &file_reader.interface;
+        const bytes = try file_read.readAllAligned(self.allocator, &file_reader.interface);
+        defer self.allocator.free(bytes);
 
-        var magic: [5]u8 = undefined;
-        try reader.readSliceAll(&magic);
-
-        const inspector = inspectors.get(&magic) orelse {
+        const magic = bytes[0..@min(bytes.len, magic_len)];
+        const inspector = inspectors.get(magic) orelse {
             log.err("No inspector found for file with magic '{s}'", .{magic});
             return InspectError.UnknownFormat;
         };
 
-        try file_reader.seekTo(0);
-        try inspector.inspect(self.allocator, reader);
+        try inspector.inspect(self.allocator, bytes);
     }
 
     pub fn deinit(self: InspectCommand) void {
