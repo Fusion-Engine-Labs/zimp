@@ -145,7 +145,7 @@ const CookJobRunner = struct {
 
         if (self.lookupEntry()) |cache_entry| {
             const source_hash = if (cache_entry.source_mtime != info.modified_ns and cache_entry.source_size == info.size) try analyzed.hash(self.ctx.io, self.ctx.source) else null;
-            const staleness = Staleness.check(cache_entry, info, source_hash, self.cache.host_os);
+            const staleness = Staleness.check(cache_entry, info, source_hash, self.cache.host_os, !self.cache.project_id.eql(self.ctx.projectId()));
             self.recordAnalysisMetrics(&result.metrics, analyzed);
 
             switch (staleness.verdict) {
@@ -191,7 +191,7 @@ const CookJobRunner = struct {
                 try analyzed.hash(self.ctx.io, self.ctx.source)
             else
                 null;
-            const staleness = Staleness.check(cache_entry, info, source_hash, self.cache.host_os);
+            const staleness = Staleness.check(cache_entry, info, source_hash, self.cache.host_os, !self.cache.project_id.eql(self.ctx.projectId()));
             self.recordAnalysisMetrics(&decision.metrics, analyzed);
 
             switch (staleness.verdict) {
@@ -266,6 +266,7 @@ const CookJobRunner = struct {
             .temporary_allocator = self.temporary_allocator,
             .io = self.ctx.io,
             .source_dir = self.ctx.source,
+            .project_id = self.ctx.projectId(),
             .source = self.record.source,
             .bytes = source_bytes,
             .writer = &file_writer.interface,

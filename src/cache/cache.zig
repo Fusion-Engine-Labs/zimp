@@ -16,11 +16,12 @@ const log = @import("../logger.zig");
 const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
 const constants = @import("../shared/constants.zig");
+const ProjectId = @import("../id/id_types.zig").ProjectId;
 
-pub const VERSION = 7;
+pub const VERSION = 8;
 pub const MAGIC = constants.FORMAT_MAGIC.ZACHE;
 
-pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
+pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16; // magic + version + entry_count + output_dir_len + host_os_len + project_id
 
 pub const CacheHeader = struct {
     version: u16 = VERSION,
@@ -46,6 +47,8 @@ pub const Cache = struct {
     source_dir: std.Io.Dir,
     output_dir_path: []const u8 = "",
     host_os: []const u8 = "",
+    /// Namespace of the `AssetId`s embedded in cooked meshes and materials.
+    project_id: ProjectId = .zero,
     dirty: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
@@ -89,6 +92,12 @@ pub const Cache = struct {
         const host_os = try allocator.dupe(u8, currentHostOsName());
         allocator.free(self.host_os);
         self.host_os = host_os;
+        self.dirty = true;
+    }
+
+    pub fn setProjectId(self: *Cache, project_id: ProjectId) void {
+        if (self.project_id.eql(project_id)) return;
+        self.project_id = project_id;
         self.dirty = true;
     }
 
@@ -228,6 +237,7 @@ pub const Cache = struct {
         try io_writer.writeAll(self.output_dir_path);
         try io_writer.writeInt(u16, @intCast(self.host_os.len), .little);
         try io_writer.writeAll(self.host_os);
+        try io_writer.writeAll(&self.project_id.uuid.bytes);
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
@@ -327,6 +337,9 @@ pub const Cache = struct {
 
         const host_os = try wire.readString(allocator, reader);
         errdefer allocator.free(host_os);
+
+        var project_id_bytes: [16]u8 = undefined;
+        try reader.readSliceAll(&project_id_bytes);
 
         var entries: std.ArrayList(CacheEntry) = .empty;
         errdefer {
@@ -440,6 +453,7 @@ pub const Cache = struct {
             .source_dir = .cwd(),
             .output_dir_path = output_dir_path,
             .host_os = host_os,
+            .project_id = .fromBytes(project_id_bytes),
             .dirty = false,
         };
     }
@@ -571,6 +585,7 @@ fn writeTestCacheWithOutputDirAndDependencies(
     try writer.writeAll(output_dir_path);
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little);
     try writer.writeAll(currentHostOsName());
+    try writer.writeAll(&ProjectId.zero.uuid.bytes);
 
     for (entries) |entry| {
         try writer.writeInt(u64, entry.source_path_hash, .little);
@@ -1001,6 +1016,7 @@ test "read errors on truncated entry data" {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little); // host_os len
     try writer.writeAll(currentHostOsName()); // host_os
+    try writer.writeAll(&ProjectId.zero.uuid.bytes); // project_id
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -1075,7 +1091,22 @@ test "write then read round-trip with zero entries" {
 }
 
 test "HEADER_SIZE matches expected layout" {
-    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16)), HEADER_SIZE);
+    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16), HEADER_SIZE);
+}
+
+test "write then readFromDir preserves the project id" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var c = try Cache.init(testing.allocator, tmp.dir, ".");
+    defer c.deinit(testing.allocator);
+    const project_id = ProjectId.parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc");
+    c.setProjectId(project_id);
+    try c.write(testing.allocator, testing.io, tmp.dir, ".zcache");
+
+    var c2 = try Cache.readFromDir(testing.allocator, testing.io, tmp.dir, ".", tmp.dir, ".zcache");
+    defer c2.deinit(testing.allocator);
+    try testing.expect(c2.project_id.eql(project_id));
 }
 
 test "upsertEntry inserts new entry when not in cache" {

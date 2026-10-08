@@ -66,6 +66,7 @@ pub const CacheSession = struct {
 
     pub fn persist(self: *CacheSession, allocator: std.mem.Allocator, ctx: *const CookContext) !u64 {
         try self.cache.setCurrentHostOs(allocator);
+        self.cache.setProjectId(ctx.projectId());
         if (!self.cache.dirty) {
             return 0;
         }

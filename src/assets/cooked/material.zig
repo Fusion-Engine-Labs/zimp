@@ -3,7 +3,8 @@ const string_list = @import("../../shared/string_list.zig");
 
 const source_file = @import("../source_file.zig");
 const raw_material = @import("../raw/material.zig");
-const path_helpers = @import("../../path.zig");
+const derive = @import("../../manifest/derive.zig");
+const ids = @import("../../id/id_types.zig");
 
 pub const AlphaMode = raw_material.AlphaMode;
 pub const CullMode = raw_material.CullMode;
@@ -49,7 +50,7 @@ pub const ParamType = enum(u16) {
 
 pub const TextureSlotEntry = struct {
     slot_name_hash: Hash,
-    texture_path_hash: Hash,
+    texture: ids.AssetId,
     slot_index: u16,
     uv_set: u16,
     uv_offset: [2]f32,
@@ -61,9 +62,6 @@ pub const TextureSlotEntry = struct {
     sampler_name: []const u8,
     sampler_name_offset: u16,
     sampler_name_len: u16,
-    cooked_path: []const u8,
-    cooked_path_offset: u16,
-    cooked_path_len: u16,
 };
 
 pub const ParamEntry = struct {
@@ -88,48 +86,36 @@ pub const ParamBuildResult = struct {
 };
 
 pub const CookedMaterial = struct {
-    shader_path_hash: Hash,
-    vertex_shader_path: []const u8,
-    vertex_shader_path_offset: u16,
-    vertex_shader_path_len: u16,
-    fragment_shader_path: []const u8,
-    fragment_shader_path_offset: u16,
-    fragment_shader_path_len: u16,
+    vertex_shader: ids.AssetId,
+    fragment_shader: ids.AssetId,
     render_state: RenderState,
     required_variants: []const []const u8,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
     param_names: []u8,
-    runtime_paths: []u8,
+    sampler_names: []u8,
 
-    pub fn cook(allocator: std.mem.Allocator, source: *const raw_material.MaterialSource) !CookedMaterial {
+    /// Resolves shader and texture source paths to the `AssetId`s the
+    /// manifest assigns them under `project_id`.
+    pub fn cook(allocator: std.mem.Allocator, source: *const raw_material.MaterialSource, project_id: ids.ProjectId) !CookedMaterial {
         const texture_slots = try allocator.alloc(TextureSlotEntry, source.textures.len);
         errdefer allocator.free(texture_slots);
-        var runtime_paths: std.ArrayList(u8) = .empty;
-        errdefer runtime_paths.deinit(allocator);
+        var sampler_names: std.ArrayList(u8) = .empty;
+        errdefer sampler_names.deinit(allocator);
 
         const vertex_source_path = try std.fmt.allocPrint(allocator, "{s}.vert", .{source.shader_path});
         defer allocator.free(vertex_source_path);
         const fragment_source_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
         defer allocator.free(fragment_source_path);
-
-        const vertex_shader_path = try path_helpers.cookedOutput(allocator, vertex_source_path, .shader_stage);
-        defer allocator.free(vertex_shader_path);
-        const fragment_shader_path = try path_helpers.cookedOutput(allocator, fragment_source_path, .shader_stage);
-        defer allocator.free(fragment_shader_path);
-
-        const vertex_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, vertex_shader_path);
-        const fragment_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, fragment_shader_path);
+        const vertex_shader = try derive.assetIdForReference(project_id, vertex_source_path);
+        const fragment_shader = try derive.assetIdForReference(project_id, fragment_source_path);
 
         for (source.textures, texture_slots) |slot, *entry| {
-            const cooked_texture_path = try path_helpers.cookedOutput(allocator, slot.texture_path, .texture);
-            defer allocator.free(cooked_texture_path);
-            const sampler_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.slot_name);
-            const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
+            const sampler_name_offset = try appendSamplerName(&sampler_names, allocator, slot.slot_name);
             entry.* = .{
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
-                .texture_path_hash = source_file.fnv1a(slot.texture_path),
+                .texture = try derive.assetIdForReference(project_id, slot.texture_path),
                 .slot_index = if (slotNameToIndex(slot.slot_name)) |idx| @intFromEnum(idx) else std.math.maxInt(u16),
                 .uv_set = slot.uv_set,
                 .uv_offset = slot.uv_offset,
@@ -138,12 +124,9 @@ pub const CookedMaterial = struct {
                 .sampler = slot.sampler,
                 .normal_scale = slot.normal_scale,
                 .occlusion_strength = slot.occlusion_strength,
-                .sampler_name = runtime_paths.items[sampler_name_offset..][0..slot.slot_name.len],
+                .sampler_name = &.{},
                 .sampler_name_offset = sampler_name_offset,
                 .sampler_name_len = @intCast(slot.slot_name.len),
-                .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
-                .cooked_path_offset = cooked_path_offset,
-                .cooked_path_len = @intCast(cooked_texture_path.len),
             };
         }
 
@@ -153,33 +136,22 @@ pub const CookedMaterial = struct {
         const required_variants = try string_list.dupeStringList(allocator, source.required_variants);
         errdefer string_list.freeStringList(allocator, required_variants);
 
-        const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_runtime_paths);
-
-        const vertex_start: usize = vertex_shader_path_offset;
-        const fragment_start: usize = fragment_shader_path_offset;
+        const owned_sampler_names = try sampler_names.toOwnedSlice(allocator);
         for (texture_slots) |*entry| {
-            const sampler_name_start: usize = entry.sampler_name_offset;
-            entry.sampler_name = owned_runtime_paths[sampler_name_start..][0..entry.sampler_name_len];
-            const start: usize = entry.cooked_path_offset;
-            entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
+            const start: usize = entry.sampler_name_offset;
+            entry.sampler_name = owned_sampler_names[start..][0..entry.sampler_name_len];
         }
 
         return .{
-            .shader_path_hash = source_file.fnv1a(source.shader_path),
-            .vertex_shader_path = owned_runtime_paths[vertex_start..][0..vertex_shader_path.len],
-            .vertex_shader_path_offset = vertex_shader_path_offset,
-            .vertex_shader_path_len = @intCast(vertex_shader_path.len),
-            .fragment_shader_path = owned_runtime_paths[fragment_start..][0..fragment_shader_path.len],
-            .fragment_shader_path_offset = fragment_shader_path_offset,
-            .fragment_shader_path_len = @intCast(fragment_shader_path.len),
+            .vertex_shader = vertex_shader,
+            .fragment_shader = fragment_shader,
             .render_state = source.render_state,
             .required_variants = required_variants,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
             .param_names = params.names,
-            .runtime_paths = owned_runtime_paths,
+            .sampler_names = owned_sampler_names,
         };
     }
 
@@ -189,15 +161,15 @@ pub const CookedMaterial = struct {
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
-        allocator.free(self.runtime_paths);
+        allocator.free(self.sampler_names);
     }
 };
 
-fn appendRuntimePath(list: *std.ArrayList(u8), allocator: std.mem.Allocator, path: []const u8) !u16 {
-    if (list.items.len > std.math.maxInt(u16)) return error.RuntimePathsTooLarge;
-    if (path.len > std.math.maxInt(u16)) return error.RuntimePathTooLarge;
+fn appendSamplerName(list: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8) !u16 {
+    if (list.items.len > std.math.maxInt(u16)) return error.SamplerNamesTooLarge;
+    if (name.len > std.math.maxInt(u16)) return error.SamplerNameTooLarge;
     const offset: u16 = @intCast(list.items.len);
-    try list.appendSlice(allocator, path);
+    try list.appendSlice(allocator, name);
     return offset;
 }
 

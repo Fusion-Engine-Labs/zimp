@@ -30,6 +30,6 @@ fn cookObj(input: *const CookInput) !void {
     const material_path = try material_generator.resolveDefaultMaterialPath(input.allocator, input.io, input.source_dir, input.source.path);
     defer input.allocator.free(material_path);
 
-    const material_paths = [_][]const u8{material_path};
-    try zmesh.ZMesh.write(input.writer, &material_paths, &parts);
+    const material_ids = [_]zmesh.AssetId{try input.referenceId(material_path)};
+    try zmesh.ZMesh.write(input.writer, &material_ids, &parts);
 }

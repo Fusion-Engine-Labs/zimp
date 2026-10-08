@@ -2,9 +2,10 @@ const std = @import("std");
 const mesh = @import("../assets/cooked/mesh.zig");
 const raw_mesh = @import("../assets/raw/mesh.zig");
 const wire = @import("../shared/wire.zig");
+pub const AssetId = @import("../id/id_types.zig").AssetId;
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
-pub const ZMESH_VERSION: u32 = 5;
+pub const ZMESH_VERSION: u32 = 6;
 
 pub const Transform = [16]f32;
 pub const identity_transform: Transform = .{
@@ -15,15 +16,14 @@ pub const identity_transform: Transform = .{
 };
 
 /// File layout: `Header`, then aligned sections in this order: the
-/// `PartEntry` table, the material slot table (`Span`s into the string blob),
-/// the string blob, and per part its vertex streams, indices, and submeshes.
+/// `PartEntry` table, the material slot table (one `AssetRef` per slot), and
+/// per part its vertex streams, indices, and submeshes.
 pub const Header = extern struct {
     file: wire.FileHeader,
     part_count: u32,
     material_slot_count: u32,
     parts: wire.Span,
     material_slots: wire.Span,
-    strings: wire.Span,
 };
 
 pub const PartEntry = extern struct {
@@ -150,16 +150,12 @@ const Plan = struct {
     layout: wire.Layout,
     parts: wire.Span,
     material_slots: wire.Span,
-    strings: wire.Span,
 
-    fn init(material_slots: []const []const u8, part_count: usize) !Plan {
+    fn init(material_slot_count: usize, part_count: usize) !Plan {
         var layout = wire.Layout.init(HEADER_SIZE);
         const parts = try layout.reserve(part_count * @sizeOf(PartEntry));
-        const slots = try layout.reserve(material_slots.len * @sizeOf(wire.Span));
-        var string_bytes: usize = 0;
-        for (material_slots) |path| string_bytes += path.len;
-        const strings = try layout.reserve(string_bytes);
-        return .{ .layout = layout, .parts = parts, .material_slots = slots, .strings = strings };
+        const slots = try layout.reserve(material_slot_count * @sizeOf(wire.AssetRef));
+        return .{ .layout = layout, .parts = parts, .material_slots = slots };
     }
 
     fn nextPart(self: *Plan, m: mesh.CookedMesh) !PartSpans {
@@ -189,8 +185,7 @@ const Plan = struct {
 pub const ZMesh = struct {
     bytes: wire.Bytes,
     part_entries: []const PartEntry,
-    material_slot_refs: []const wire.Span,
-    strings: []const u8,
+    material_slot_refs: []const wire.AssetRef,
 
     pub const CookPart = struct {
         mesh: mesh.CookedMesh,
@@ -210,14 +205,10 @@ pub const ZMesh = struct {
         if (header.material_slot_count == 0) return error.NoMaterialSlots;
 
         var order = wire.SectionOrder.init(HEADER_SIZE);
-        for ([_]wire.Span{ header.parts, header.material_slots, header.strings }) |span| try order.next(span);
+        for ([_]wire.Span{ header.parts, header.material_slots }) |span| try order.next(span);
 
-        const strings = try wire.sectionSlice(u8, bytes, header.strings, header.strings.len);
-        const slot_refs = try wire.sectionSlice(wire.Span, bytes, header.material_slots, header.material_slot_count);
-        for (slot_refs) |ref| {
-            if (ref.len == 0) return error.EmptyMaterialPath;
-            try wire.checkString(strings, ref);
-        }
+        const slot_refs = try wire.sectionSlice(wire.AssetRef, bytes, header.material_slots, header.material_slot_count);
+        for (slot_refs) |ref| try ref.check();
 
         const entries = try wire.sectionSlice(PartEntry, bytes, header.parts, header.part_count);
         for (entries) |*entry| {
@@ -230,7 +221,7 @@ pub const ZMesh = struct {
             _ = try MeshPart.view(bytes, entry, header.material_slot_count);
         }
 
-        return .{ .bytes = bytes, .part_entries = entries, .material_slot_refs = slot_refs, .strings = strings };
+        return .{ .bytes = bytes, .part_entries = entries, .material_slot_refs = slot_refs };
     }
 
     pub fn partCount(self: *const ZMesh) usize {
@@ -247,16 +238,17 @@ pub const ZMesh = struct {
         return self.material_slot_refs.len;
     }
 
-    pub fn materialSlot(self: *const ZMesh, index: usize) []const u8 {
-        return wire.stringAt(self.strings, self.material_slot_refs[index]);
+    /// Id of the material asset bound to submeshes with this `material_index`.
+    pub fn materialSlot(self: *const ZMesh, index: usize) AssetId {
+        return self.material_slot_refs[index].toId();
     }
 
-    pub fn write(writer: *std.Io.Writer, material_slots: []const []const u8, parts: []const CookPart) !void {
+    pub fn write(writer: *std.Io.Writer, material_slots: []const AssetId, parts: []const CookPart) !void {
         if (parts.len == 0) return error.NoMeshes;
         if (material_slots.len == 0) return error.NoMaterialSlots;
         if (material_slots.len > std.math.maxInt(u16)) return error.TooManyMaterialSlots;
-        for (material_slots) |path| {
-            if (path.len == 0) return error.EmptyMaterialPath;
+        for (material_slots) |id| {
+            if (id.isZero()) return error.ZeroAssetRef;
         }
         for (parts) |p| {
             for (p.mesh.submeshes) |submesh| {
@@ -265,19 +257,18 @@ pub const ZMesh = struct {
         }
 
         // Pass 1: total size.
-        var sizing = try Plan.init(material_slots, parts.len);
+        var sizing = try Plan.init(material_slots.len, parts.len);
         for (parts) |p| _ = try sizing.nextPart(p.mesh);
         const total_size = sizing.layout.totalSize();
 
         var out: wire.LayoutWriter = .{ .writer = writer };
-        var plan = try Plan.init(material_slots, parts.len);
+        var plan = try Plan.init(material_slots.len, parts.len);
         try out.value(Header{
             .file = .init(MAGIC, ZMESH_VERSION, total_size),
             .part_count = @intCast(parts.len),
             .material_slot_count = @intCast(material_slots.len),
             .parts = plan.parts,
             .material_slots = plan.material_slots,
-            .strings = plan.strings,
         });
 
         // Pass 2: part entry table.
@@ -288,16 +279,10 @@ pub const ZMesh = struct {
         }
 
         try out.beginSection(plan.material_slots);
-        var string_offset: u32 = 0;
-        for (material_slots) |path| {
-            try out.value(wire.Span{ .offset = string_offset, .len = @intCast(path.len) });
-            string_offset += @intCast(path.len);
-        }
-        try out.beginSection(plan.strings);
-        for (material_slots) |path| try out.bytes(path);
+        for (material_slots) |id| try out.value(wire.AssetRef.fromId(id));
 
         // Pass 3: part data sections.
-        var data_plan = try Plan.init(material_slots, parts.len);
+        var data_plan = try Plan.init(material_slots.len, parts.len);
         for (parts) |p| {
             const spans = try data_plan.nextPart(p.mesh);
             try writePartData(&out, p.mesh, spans);
@@ -374,7 +359,7 @@ pub fn view(bytes: wire.Bytes) !ZMesh {
     return ZMesh.view(bytes);
 }
 
-pub fn write(writer: *std.Io.Writer, material_slots: []const []const u8, parts: []const ZMesh.CookPart) !void {
+pub fn write(writer: *std.Io.Writer, material_slots: []const AssetId, parts: []const ZMesh.CookPart) !void {
     return ZMesh.write(writer, material_slots, parts);
 }
 
@@ -399,9 +384,12 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
         },
         .transform = identity_transform,
     }};
-    const material_slots = [_][]const u8{"materials/test.zamat"};
+    const material_slots = [_]AssetId{test_material_id};
     try ZMesh.write(writer, &material_slots, &parts);
 }
+
+/// Material slot written by `writeTestZmeshFile`.
+pub const test_material_id = AssetId.parseComptime("3f2a77f1-9c44-4b7e-9b1a-2f6c1d8e5a01");
 
 const testing = std.testing;
 
@@ -428,7 +416,7 @@ fn makeCookedMesh(vertices: []const mesh.CookedVertex, indices: mesh.IndexBuffer
     };
 }
 
-const one_slot = [_][]const u8{"materials/test.zamat"};
+const one_slot = [_]AssetId{test_material_id};
 const one_submesh = [_]raw_mesh.RawSubmesh{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }};
 const unit_bounds: mesh.AABB = .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } };
 
@@ -445,7 +433,7 @@ fn expectAligned(bytes: wire.Bytes, slice: anytype) !void {
 }
 
 test "on-disk struct sizes" {
-    try testing.expectEqual(@as(u32, 48), HEADER_SIZE);
+    try testing.expectEqual(@as(u32, 40), HEADER_SIZE);
     try testing.expectEqual(@as(usize, 192), @sizeOf(PartEntry));
     try testing.expectEqual(@as(usize, 12), @sizeOf(Submesh));
 }
@@ -557,13 +545,14 @@ test "ZMesh round-trips multiple mesh parts and transforms" {
 
     var buf: [4096]u8 align(wire.section_alignment) = undefined;
     var writer = std.Io.Writer.fixed(&buf);
-    const material_slots = [_][]const u8{ "materials/stone.zamat", "materials/metal.zamat" };
+    const stone = AssetId.parseComptime("8c1d6602-b3f4-4910-9c44-4b7e9b1a2f6c");
+    const material_slots = [_]AssetId{ stone, test_material_id };
     try ZMesh.write(&writer, &material_slots, &parts);
 
     const model = try ZMesh.view(buf[0..writer.end]);
     try testing.expectEqual(@as(usize, 2), model.materialSlotCount());
-    try testing.expectEqualStrings("materials/stone.zamat", model.materialSlot(0));
-    try testing.expectEqualStrings("materials/metal.zamat", model.materialSlot(1));
+    try testing.expect(model.materialSlot(0).eql(stone));
+    try testing.expect(model.materialSlot(1).eql(test_material_id));
     try testing.expectEqual(@as(usize, 2), model.partCount());
     try testing.expectEqual(@as(u32, 3), model.part(0).mesh.vertex_count);
     try testing.expectEqual(@as(u16, 1), model.part(1).mesh.submeshes[0].material_index);
@@ -583,7 +572,7 @@ test "ZMesh.write validates inputs" {
     var writer = std.Io.Writer.fixed(&buf);
     try testing.expectError(error.NoMeshes, ZMesh.write(&writer, &one_slot, &.{}));
     try testing.expectError(error.NoMaterialSlots, ZMesh.write(&writer, &.{}, &parts));
-    try testing.expectError(error.EmptyMaterialPath, ZMesh.write(&writer, &.{""}, &parts));
+    try testing.expectError(error.ZeroAssetRef, ZMesh.write(&writer, &.{AssetId.zero}, &parts));
     try testing.expectError(error.InvalidMaterialIndex, ZMesh.write(&writer, &one_slot, &parts));
 }
 
@@ -658,6 +647,12 @@ test "ZMesh.view rejects out-of-range submeshes and material indices" {
     submesh.index_count = 3;
     submesh.material_index = 1;
     try testing.expectError(error.InvalidMaterialIndex, ZMesh.view(buf[0..len]));
+    submesh.material_index = 0;
+
+    const header: *const Header = @ptrCast(&buf);
+    const slot: *wire.AssetRef = @ptrCast(@alignCast(buf[header.material_slots.offset..].ptr));
+    slot.* = .{ .bytes = @splat(0) };
+    try testing.expectError(error.ZeroAssetRef, ZMesh.view(buf[0..len]));
 }
 
 test "writeTestZmeshFile produces a viewable mesh" {
@@ -666,7 +661,7 @@ test "writeTestZmeshFile produces a viewable mesh" {
     try writeTestZmeshFile(&writer);
 
     const model = try ZMesh.view(buf[0..writer.end]);
-    try testing.expectEqualStrings("materials/test.zamat", model.materialSlot(0));
+    try testing.expect(model.materialSlot(0).eql(test_material_id));
     const part = model.part(0).mesh;
     try testing.expect(part.normals != null);
     try testing.expect(part.uv0 != null);

@@ -27,6 +27,7 @@ fn inspectZCache(allocator: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("zcache v{d}", .{c.header.version});
     log.info("  Output dir: {s}", .{if (c.output_dir_path.len > 0) c.output_dir_path else "(none)"});
     log.info("  Host OS: {s}", .{if (c.host_os.len > 0) c.host_os else "(unknown)"});
+    log.info("  Project: {f}", .{c.project_id});
     log.info("  Entries: {d}", .{c.header.entry_count});
 
     var max_source_len: usize = "source".len;
@@ -195,6 +196,7 @@ test "Cache.read accepts zero entries" {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
+    try writer.writeAll(&[_]u8{0} ** 16); // project_id
     try writer.writeInt(u32, 0, .little); // dependency_row_count
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
@@ -216,6 +218,7 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
+    try writer.writeAll(&[_]u8{0} ** 16); // project_id
 
     try writer.writeInt(u64, 0xAABBCCDD, .little);
     try writer.writeInt(u64, 0x11223344, .little);
@@ -269,6 +272,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
+    try writer.writeAll(&[_]u8{0} ** 16); // project_id
 
     for (0..opts.entry_count) |i| {
         try writer.writeInt(u64, 0x1000 + i, .little); // source_path_hash

@@ -22,6 +22,15 @@ pub const AssetKind = enum(u8) {
         };
     }
 
+    /// Kinds whose cooked bytes embed project-scoped `AssetId` references, so
+    /// they must be recooked when the project id changes.
+    pub fn embedsAssetIds(self: AssetKind) bool {
+        return switch (self) {
+            .mesh, .material => true,
+            .texture, .shader_stage => false,
+        };
+    }
+
     pub fn fromCookedPath(path: []const u8) ?AssetKind {
         for (std.enums.values(AssetKind)) |kind| {
             const extension = kind.cookedExtension();

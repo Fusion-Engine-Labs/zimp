@@ -4,9 +4,10 @@ const constants = @import("../shared/constants.zig");
 const cooked_material = @import("../assets/cooked/material.zig");
 const raw_material = @import("../assets/raw/material.zig");
 const wire = @import("../shared/wire.zig");
+const ids = @import("../id/id_types.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZAMAT;
-pub const ZAMAT_VERSION: u32 = 4;
+pub const ZAMAT_VERSION: u32 = 5;
 
 pub const AlphaMode = cooked_material.AlphaMode;
 pub const CullMode = cooked_material.CullMode;
@@ -29,12 +30,11 @@ const render_flag_depth_write: u8 = 0x4;
 
 /// File layout: `Header`, then aligned sections: the `TextureSlot` table, the
 /// `Param` table, required-variant refs, the param data block, and one string
-/// blob (param names, variant names, then runtime paths).
+/// blob (param names, variant names, then sampler names).
 pub const Header = extern struct {
     file: wire.FileHeader,
-    shader_path_hash: u64,
-    vertex_shader_path: wire.Span,
-    fragment_shader_path: wire.Span,
+    vertex_shader: wire.AssetRef,
+    fragment_shader: wire.AssetRef,
     alpha_cutoff: f32,
     alpha_mode: u8,
     cull_mode: u8,
@@ -53,7 +53,7 @@ pub const Header = extern struct {
 
 pub const TextureSlot = extern struct {
     slot_name_hash: u64,
-    texture_path_hash: u64,
+    texture: wire.AssetRef,
     slot_index: u16,
     uv_set: u16,
     min_filter: u8,
@@ -65,7 +65,6 @@ pub const TextureSlot = extern struct {
     _reserved1: u16 = 0,
     max_anisotropy: f32,
     sampler_name: wire.Span,
-    cooked_path: wire.Span,
     uv_offset: [2]f32,
     uv_scale: [2]f32,
     uv_rotation: f32,
@@ -93,12 +92,11 @@ pub const HEADER_SIZE: u32 = @sizeOf(Header);
 /// Decoded texture slot. Strings point into the material file bytes.
 pub const TextureSlotView = struct {
     slot_name_hash: u64,
-    texture_path_hash: u64,
+    texture: ids.AssetId,
     slot_index: u16,
     uv_set: u16,
     sampler: SamplerDesc,
     sampler_name: []const u8,
-    cooked_path: []const u8,
     uv_offset: [2]f32,
     uv_scale: [2]f32,
     uv_rotation: f32,
@@ -114,9 +112,8 @@ pub const ParamView = struct {
 
 /// Zero-copy view of a cooked material. Borrows the bytes it was created from.
 pub const Zamat = struct {
-    shader_path_hash: u64,
-    vertex_shader_path: []const u8,
-    fragment_shader_path: []const u8,
+    vertex_shader: ids.AssetId,
+    fragment_shader: ids.AssetId,
     render_state: RenderState,
     texture_slots: []const TextureSlot,
     params: []const Param,
@@ -142,12 +139,12 @@ pub const Zamat = struct {
         const params = try wire.sectionSlice(Param, bytes, header.params, header.param_count);
         const variants = try wire.sectionSlice(wire.Span, bytes, header.variants, header.variant_count);
 
-        try wire.checkString(strings, header.vertex_shader_path);
-        try wire.checkString(strings, header.fragment_shader_path);
+        try header.vertex_shader.check();
+        try header.fragment_shader.check();
         for (texture_slots) |slot| {
             _ = try decodeSampler(slot);
+            try slot.texture.check();
             try wire.checkString(strings, slot.sampler_name);
-            try wire.checkString(strings, slot.cooked_path);
         }
         for (params) |p| {
             _ = try wire.enumFromInt(ParamType, p.param_type);
@@ -157,9 +154,8 @@ pub const Zamat = struct {
         for (variants) |ref| try wire.checkString(strings, ref);
 
         return .{
-            .shader_path_hash = header.shader_path_hash,
-            .vertex_shader_path = wire.stringAt(strings, header.vertex_shader_path),
-            .fragment_shader_path = wire.stringAt(strings, header.fragment_shader_path),
+            .vertex_shader = header.vertex_shader.toId(),
+            .fragment_shader = header.fragment_shader.toId(),
             .render_state = .{
                 .alpha_mode = try wire.enumFromInt(AlphaMode, header.alpha_mode),
                 .alpha_cutoff = header.alpha_cutoff,
@@ -181,12 +177,11 @@ pub const Zamat = struct {
         const slot = &self.texture_slots[index];
         return .{
             .slot_name_hash = slot.slot_name_hash,
-            .texture_path_hash = slot.texture_path_hash,
+            .texture = slot.texture.toId(),
             .slot_index = slot.slot_index,
             .uv_set = slot.uv_set,
             .sampler = decodeSampler(slot.*) catch unreachable, // validated in `view`
             .sampler_name = wire.stringAt(self.strings, slot.sampler_name),
-            .cooked_path = wire.stringAt(self.strings, slot.cooked_path),
             .uv_offset = slot.uv_offset,
             .uv_scale = slot.uv_scale,
             .uv_rotation = slot.uv_rotation,
@@ -233,18 +228,18 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     if (material.param_entries.len > max_params) return error.TooManyParams;
     if (material.required_variants.len > max_variants) return error.TooManyVariants;
 
-    // String blob: param names, then variant names, then runtime paths.
+    // String blob: param names, then variant names, then sampler names.
     var variant_bytes: usize = 0;
     for (material.required_variants) |variant| variant_bytes += variant.len;
     const variant_base: u32 = @intCast(material.param_names.len);
-    const runtime_base: u32 = @intCast(material.param_names.len + variant_bytes);
+    const sampler_base: u32 = @intCast(material.param_names.len + variant_bytes);
 
     var layout = wire.Layout.init(HEADER_SIZE);
     const texture_slots = try layout.reserve(material.texture_slots.len * @sizeOf(TextureSlot));
     const params = try layout.reserve(material.param_entries.len * @sizeOf(Param));
     const variants = try layout.reserve(material.required_variants.len * @sizeOf(wire.Span));
     const param_data = try layout.reserve(material.param_data.len);
-    const strings = try layout.reserve(runtime_base + material.runtime_paths.len);
+    const strings = try layout.reserve(sampler_base + material.sampler_names.len);
     const total_size = layout.totalSize();
 
     const state = material.render_state;
@@ -256,9 +251,8 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     var out: wire.LayoutWriter = .{ .writer = writer };
     try out.value(Header{
         .file = .init(MAGIC, ZAMAT_VERSION, total_size),
-        .shader_path_hash = material.shader_path_hash,
-        .vertex_shader_path = .{ .offset = runtime_base + material.vertex_shader_path_offset, .len = material.vertex_shader_path_len },
-        .fragment_shader_path = .{ .offset = runtime_base + material.fragment_shader_path_offset, .len = material.fragment_shader_path_len },
+        .vertex_shader = .fromId(material.vertex_shader),
+        .fragment_shader = .fromId(material.fragment_shader),
         .alpha_cutoff = state.alpha_cutoff,
         .alpha_mode = @intCast(@intFromEnum(state.alpha_mode)),
         .cull_mode = @intCast(@intFromEnum(state.cull_mode)),
@@ -278,7 +272,7 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     for (material.texture_slots) |entry| {
         try out.value(TextureSlot{
             .slot_name_hash = entry.slot_name_hash,
-            .texture_path_hash = entry.texture_path_hash,
+            .texture = .fromId(entry.texture),
             .slot_index = entry.slot_index,
             .uv_set = entry.uv_set,
             .min_filter = @intFromEnum(entry.sampler.min_filter),
@@ -287,8 +281,7 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
             .wrap_s = @intFromEnum(entry.sampler.wrap_s),
             .wrap_t = @intFromEnum(entry.sampler.wrap_t),
             .max_anisotropy = entry.sampler.max_anisotropy,
-            .sampler_name = .{ .offset = runtime_base + entry.sampler_name_offset, .len = entry.sampler_name_len },
-            .cooked_path = .{ .offset = runtime_base + entry.cooked_path_offset, .len = entry.cooked_path_len },
+            .sampler_name = .{ .offset = sampler_base + entry.sampler_name_offset, .len = entry.sampler_name_len },
             .uv_offset = entry.uv_offset,
             .uv_scale = entry.uv_scale,
             .uv_rotation = entry.uv_rotation,
@@ -318,23 +311,25 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     try out.beginSection(strings);
     try out.bytes(material.param_names);
     for (material.required_variants) |variant| try out.bytes(variant);
-    try out.bytes(material.runtime_paths);
+    try out.bytes(material.sampler_names);
     try out.finish(total_size);
 }
 
-pub fn writeZamat(writer: *std.Io.Writer, material_source: raw_material.MaterialSource, allocator: std.mem.Allocator) !void {
-    var cooked = try CookedMaterial.cook(allocator, &material_source);
+pub fn writeZamat(writer: *std.Io.Writer, material_source: raw_material.MaterialSource, project_id: ids.ProjectId, allocator: std.mem.Allocator) !void {
+    var cooked = try CookedMaterial.cook(allocator, &material_source, project_id);
     defer cooked.deinit(allocator);
     try write(writer, cooked);
 }
 
 const testing = std.testing;
 const fnv1a = @import("../assets/source_file.zig").fnv1a;
+const derive = @import("../manifest/derive.zig");
+const test_project = ids.ProjectId.parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc");
 
 fn cookedFromSource(source_text: []const u8) !CookedMaterial {
     var parsed = try raw_material.parseMaterialSource(source_text, testing.allocator);
     defer parsed.deinit(testing.allocator);
-    return CookedMaterial.cook(testing.allocator, &parsed);
+    return CookedMaterial.cook(testing.allocator, &parsed, test_project);
 }
 
 fn writeToBuffer(buf: []align(wire.section_alignment) u8, cooked: CookedMaterial) !wire.Bytes {
@@ -344,7 +339,7 @@ fn writeToBuffer(buf: []align(wire.section_alignment) u8, cooked: CookedMaterial
 }
 
 test "on-disk struct sizes" {
-    try testing.expectEqual(@as(u32, 96), HEADER_SIZE);
+    try testing.expectEqual(@as(u32, 104), HEADER_SIZE);
     try testing.expectEqual(@as(usize, 80), @sizeOf(TextureSlot));
     try testing.expectEqual(@as(usize, 20), @sizeOf(Param));
 }
@@ -371,7 +366,7 @@ test "Zamat write aligns every section and records total size" {
     try testing.expectEqualSlices(u8, MAGIC, bytes[0..4]);
     const header = try wire.structAt(Header, bytes, 0);
     try testing.expectEqual(@as(u32, @intCast(bytes.len)), header.file.total_size);
-    try testing.expectEqual(HEADER_SIZE, header.texture_slots.offset);
+    try testing.expectEqual(std.mem.alignForward(u32, HEADER_SIZE, wire.section_alignment), header.texture_slots.offset);
     try testing.expectEqual(@as(u32, 2 * @sizeOf(TextureSlot)), header.texture_slots.len);
     try testing.expectEqual(@as(u32, 3 * @sizeOf(Param)), header.params.len);
     for ([_]wire.Span{ header.texture_slots, header.params, header.param_data, header.strings }) |span| {
@@ -397,16 +392,14 @@ test "Zamat write and view round trips" {
     var buf: [1024]u8 align(wire.section_alignment) = undefined;
     const loaded = try Zamat.view(try writeToBuffer(&buf, cooked));
 
-    try testing.expectEqual(fnv1a("shaders/basic"), loaded.shader_path_hash);
-    try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
-    try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
+    try testing.expect(loaded.vertex_shader.eql(derive.assetIdForPath(test_project, "shaders/basic.vert")));
+    try testing.expect(loaded.fragment_shader.eql(derive.assetIdForPath(test_project, "shaders/basic.frag")));
     try testing.expectEqual(AlphaMode.alpha_test, loaded.render_state.alpha_mode);
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
     const tex = loaded.textureSlot(0);
     try testing.expectEqual(fnv1a("u_albedo"), tex.slot_name_hash);
-    try testing.expectEqual(fnv1a("textures/test_albedo.png"), tex.texture_path_hash);
+    try testing.expect(tex.texture.eql(derive.assetIdForPath(test_project, "textures/test_albedo.png")));
     try testing.expectEqualStrings("u_albedo", tex.sampler_name);
-    try testing.expectEqualStrings("textures/test_albedo.ztex", tex.cooked_path);
     try testing.expectEqual(@as(usize, 2), loaded.params.len);
     try testing.expectEqualStrings("u_enabled", loaded.param(0).name);
     try testing.expectEqual(ParamType.bool, loaded.param(0).param_type);
@@ -483,7 +476,7 @@ test "Zamat round trips required shader variants" {
     variants[1] = try testing.allocator.dupe(u8, "ALPHA_TEST");
     parsed.required_variants = variants;
 
-    var cooked = try CookedMaterial.cook(testing.allocator, &parsed);
+    var cooked = try CookedMaterial.cook(testing.allocator, &parsed, test_project);
     defer cooked.deinit(testing.allocator);
 
     var buf: [512]u8 align(wire.section_alignment) = undefined;
@@ -492,7 +485,21 @@ test "Zamat round trips required shader variants" {
     try testing.expectEqual(@as(usize, 2), loaded.requiredVariantCount());
     try testing.expectEqualStrings("HAS_NORMAL_MAP", loaded.requiredVariant(0));
     try testing.expectEqualStrings("ALPHA_TEST", loaded.requiredVariant(1));
-    try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
+}
+
+test "Zamat resolves builtin shader references to builtin ids" {
+    var cooked = try cookedFromSource(
+        \\[material]
+        \\shader = "fusion/standard"
+        \\
+    );
+    defer cooked.deinit(testing.allocator);
+
+    var buf: [256]u8 align(wire.section_alignment) = undefined;
+    const loaded = try Zamat.view(try writeToBuffer(&buf, cooked));
+    const builtin_registry = @import("../builtin/registry.zig");
+    try testing.expect(loaded.vertex_shader.eql(builtin_registry.idFor("fusion/standard.vert")));
+    try testing.expect(loaded.fragment_shader.eql(builtin_registry.idFor("fusion/standard.frag")));
 }
 
 test "Zamat supports empty texture and param tables" {
@@ -505,7 +512,7 @@ test "Zamat supports empty texture and param tables" {
 
     var buf: [256]u8 align(wire.section_alignment) = undefined;
     const bytes = try writeToBuffer(&buf, cooked);
-    try testing.expectEqual(@as(usize, HEADER_SIZE + cooked.runtime_paths.len), bytes.len);
+    try testing.expectEqual(@as(usize, HEADER_SIZE), bytes.len);
 
     const loaded = try Zamat.view(bytes);
     try testing.expectEqual(@as(usize, 0), loaded.texture_slots.len);
@@ -539,9 +546,17 @@ test "Zamat.view rejects corrupted files" {
     slot.wrap_s = 9;
     try testing.expectError(error.InvalidEnumValue, Zamat.view(buf[0..len]));
     slot.wrap_s = 0;
-    slot.cooked_path.len = 4096;
+    slot.sampler_name.len = 4096;
     try testing.expectError(error.InvalidStringRef, Zamat.view(buf[0..len]));
-    slot.cooked_path.len = 1;
+    slot.sampler_name.len = 1;
+    const texture = slot.texture;
+    slot.texture = .{ .bytes = @splat(0) };
+    try testing.expectError(error.ZeroAssetRef, Zamat.view(buf[0..len]));
+    slot.texture = texture;
+    const vertex_shader = header.vertex_shader;
+    header.vertex_shader = .{ .bytes = @splat(0) };
+    try testing.expectError(error.ZeroAssetRef, Zamat.view(buf[0..len]));
+    header.vertex_shader = vertex_shader;
     param.data.offset = 64;
     try testing.expectError(error.InvalidStringRef, Zamat.view(buf[0..len]));
     param.data.offset = 0;
