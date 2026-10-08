@@ -152,6 +152,6 @@ test "viewBytes dispatches on asset kind" {
     try mesh_format.writeTestZmeshFile(&writer);
 
     const view = try viewBytes(buf[0..writer.end], .mesh);
-    try testing.expectEqualStrings("materials/test.zamat", view.mesh.materialSlot(0));
+    try testing.expect(view.mesh.materialSlot(0).eql(mesh_format.test_material_id));
     try testing.expectError(error.InvalidMagic, viewBytes(buf[0..writer.end], .texture));
 }

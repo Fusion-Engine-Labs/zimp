@@ -26,6 +26,8 @@ fn cookGltf(input: *const CookInput) !void {
 
     const material_paths = try material_generator.resolveMaterialPaths(input.allocator, input.io, input.source_dir, input.source.path, &document.gltf.value);
     defer material_generator.freeMaterialPaths(input.allocator, material_paths);
+    const material_ids = try input.referenceIds(material_paths);
+    defer input.allocator.free(material_ids);
 
-    try ZMesh.write(input.writer, material_paths, model.parts);
+    try ZMesh.write(input.writer, material_ids, model.parts);
 }

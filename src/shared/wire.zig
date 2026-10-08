@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const AssetId = @import("../id/id_types.zig").AssetId;
 
 comptime {
     // Cooked formats are viewed in place, so their on-disk byte order must
@@ -49,6 +50,28 @@ pub const Span = extern struct {
         return @as(u64, self.offset) + self.len;
     }
 };
+
+/// On-disk reference to another asset: the raw 16 bytes of its `AssetId`.
+pub const AssetRef = extern struct {
+    bytes: [16]u8,
+
+    pub fn fromId(id: AssetId) AssetRef {
+        return .{ .bytes = id.uuid.bytes };
+    }
+
+    pub fn toId(self: AssetRef) AssetId {
+        return .fromBytes(self.bytes);
+    }
+
+    /// Writers never emit the zero id, so a zero ref means a corrupt file.
+    pub fn check(self: AssetRef) !void {
+        if (std.mem.allEqual(u8, &self.bytes, 0)) return error.ZeroAssetRef;
+    }
+};
+
+comptime {
+    assertTightLayout(AssetRef);
+}
 
 /// Fails compilation if `T` has implicit padding, which would make written
 /// bytes nondeterministic.

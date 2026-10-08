@@ -86,6 +86,7 @@ fn publishOne(allocator: std.mem.Allocator, ctx: *const CookContext, asset: buil
         .allocator = allocator,
         .io = ctx.io,
         .source_dir = ctx.source,
+        .project_id = ctx.projectId(),
         .source = source_file,
         .bytes = asset.bytes,
         .writer = &writer.interface,

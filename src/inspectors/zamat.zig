@@ -12,7 +12,6 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("zamat v{d}", .{zamat.ZAMAT_VERSION});
     log.info("  Magic:       {s}", .{zamat.MAGIC});
     log.info("  Version:     {d}", .{zamat.ZAMAT_VERSION});
-    log.info("  Shader hash: 0x{x:0>16}", .{material.shader_path_hash});
     log.info("  Alpha mode:  {s}", .{@tagName(material.render_state.alpha_mode)});
     log.info("  Alpha cut:   {d}", .{material.render_state.alpha_cutoff});
     log.info("  Cull mode:   {s}", .{@tagName(material.render_state.cull_mode)});
@@ -22,9 +21,9 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("  Variants:    {d}", .{material.requiredVariantCount()});
 
     log.info("", .{});
-    log.info("Shader Paths:", .{});
-    log.info("  Vertex:   {s}", .{material.vertex_shader_path});
-    log.info("  Fragment: {s}", .{material.fragment_shader_path});
+    log.info("Shaders:", .{});
+    log.info("  Vertex:   {f}", .{material.vertex_shader});
+    log.info("  Fragment: {f}", .{material.fragment_shader});
 
     log.info("", .{});
     log.info("Required Variants:", .{});
@@ -34,16 +33,15 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "name", "cooked_path" });
+    log.info("  {s: >5}  {s: >18}  {s: <24}  {s}", .{ "index", "slot_hash", "name", "texture" });
     log.info("  {s}", .{"-" ** 88});
     for (0..material.texture_slots.len) |i| {
         const entry = material.textureSlot(i);
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {s: <24}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  {s: <24}  {f}", .{
             i,
             entry.slot_name_hash,
-            entry.texture_path_hash,
             entry.sampler_name,
-            entry.cooked_path,
+            entry.texture,
         });
     }
 
@@ -129,7 +127,7 @@ test "inspectZamat uses the format view" {
     , std.testing.allocator);
     defer parsed.deinit(std.testing.allocator);
 
-    var cooked = try CookedMaterial.cook(std.testing.allocator, &parsed);
+    var cooked = try CookedMaterial.cook(std.testing.allocator, &parsed, .zero);
     defer cooked.deinit(std.testing.allocator);
 
     var file_buf: [1024]u8 align(wire.section_alignment) = undefined;

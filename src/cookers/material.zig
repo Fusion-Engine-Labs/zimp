@@ -21,7 +21,7 @@ fn cookMaterial(input: *const CookInput) !void {
 
     try validateReferences(input.allocator, input.io, input.source_dir, input.source.path, &source);
 
-    var cooked = try CookedMaterial.cook(input.allocator, &source);
+    var cooked = try CookedMaterial.cook(input.allocator, &source, input.project_id);
     defer cooked.deinit(input.allocator);
 
     try zamat.write(input.writer, cooked);
@@ -326,7 +326,7 @@ fn cookMaterialFixture(allocator: std.mem.Allocator, io: std.Io, source_dir: std
     const result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path);
     defer allocator.free(result);
     const source = SourceFile.fromPath(file_path);
-    const input = CookInput{ .allocator = allocator, .io = io, .source_dir = source_dir, .source = source, .bytes = result, .writer = writer };
+    const input = CookInput{ .allocator = allocator, .io = io, .source_dir = source_dir, .project_id = .zero, .source = source, .bytes = result, .writer = writer };
     try cooker().cook(&input);
 }
 
@@ -371,9 +371,10 @@ test "material cooker writes zamat" {
 
     const loaded = try zamat.Zamat.view(out[0..writer.end]);
 
-    try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
-    try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
-    try testing.expectEqualStrings("textures/missing.ztex", loaded.textureSlot(0).cooked_path);
+    const derive = @import("../manifest/derive.zig");
+    try testing.expect(loaded.vertex_shader.eql(derive.assetIdForPath(.zero, "shaders/basic.vert")));
+    try testing.expect(loaded.fragment_shader.eql(derive.assetIdForPath(.zero, "shaders/basic.frag")));
+    try testing.expect(loaded.textureSlot(0).texture.eql(derive.assetIdForPath(.zero, "textures/missing.png")));
 }
 
 test "material cooker validates builtin standard uniforms without freeing embedded source" {

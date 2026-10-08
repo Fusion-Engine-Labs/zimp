@@ -11,7 +11,7 @@ fn inspectZmesh(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("zmesh v{d}", .{zmesh.ZMESH_VERSION});
     log.info("Material slots: {d}", .{model.materialSlotCount()});
     for (0..model.materialSlotCount()) |i| {
-        log.info("  [{d}] {s}", .{ i, model.materialSlot(i) });
+        log.info("  [{d}] {f}", .{ i, model.materialSlot(i) });
     }
     log.info("Mesh parts: {d}", .{model.partCount()});
 

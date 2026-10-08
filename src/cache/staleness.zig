@@ -10,6 +10,7 @@ pub const Staleness = enum {
     stale_size,
     stale_content,
     stale_host_os,
+    stale_project_id,
     errored,
     not_cached,
 
@@ -25,6 +26,7 @@ pub const Staleness = enum {
         source_file_info: SourceFile.FileInfo,
         source_content_hash: ?Hash,
         cached_host_os: []const u8,
+        project_id_changed: bool,
     ) Result {
         if (cache_entry.isErrored()) {
             return .{ .verdict = .errored };
@@ -32,6 +34,10 @@ pub const Staleness = enum {
 
         if (cache_entry.asset_kind != null and cache_entry.asset_kind.?.rebuildsOnHostOsChange() and !std.mem.eql(u8, cached_host_os, @tagName(builtin.os.tag))) {
             return .{ .verdict = .stale_host_os };
+        }
+
+        if (project_id_changed and cache_entry.asset_kind != null and cache_entry.asset_kind.?.embedsAssetIds()) {
+            return .{ .verdict = .stale_project_id };
         }
 
         if (cache_entry.source_mtime == source_file_info.modified_ns) {
@@ -99,7 +105,7 @@ test "check returns cached when mtime matches" {
     const sf = makeSourceFile("a.glb");
     const entry = try makeCacheEntryFromFile(tmp, &sf);
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName());
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName(), false);
     try testing.expectEqual(Staleness.cached, result.verdict);
 }
 
@@ -113,7 +119,7 @@ test "check returns stale_size when size differs" {
     entry.source_mtime = 0;
     entry.source_size = 999;
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName());
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName(), false);
     try testing.expectEqual(Staleness.stale_size, result.verdict);
 }
 
@@ -127,7 +133,7 @@ test "check returns stale_content when size matches but hash differs" {
     entry.source_mtime = 0;
     entry.content_hash = 0xDEAD;
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName());
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName(), false);
     try testing.expectEqual(Staleness.stale_content, result.verdict);
 }
 
@@ -140,7 +146,7 @@ test "check returns hash_match when size and hash match but mtime differs" {
     var entry = try makeCacheEntryFromFile(tmp, &sf);
     entry.source_mtime = 0;
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName());
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName(), false);
     try testing.expectEqual(Staleness.hash_match, result.verdict);
 }
 
@@ -153,7 +159,7 @@ test "check returns stale_host_os for OS-sensitive cached asset from different h
     var entry = try makeCacheEntryFromFile(tmp, &sf);
     entry.asset_kind = .material;
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os");
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os", false);
     try testing.expectEqual(Staleness.stale_host_os, result.verdict);
 }
 
@@ -165,6 +171,22 @@ test "check ignores host OS changes for portable cached asset types" {
     const sf = makeSourceFile("a.glb");
     const entry = try makeCacheEntryFromFile(tmp, &sf);
 
-    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os");
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os", false);
     try testing.expectEqual(Staleness.cached, result.verdict);
+}
+
+test "check returns stale_project_id for id-embedding assets when the project id changed" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try createTestFile(tmp, "a.glb", "hello");
+    const sf = makeSourceFile("a.glb");
+    var entry = try makeCacheEntryFromFile(tmp, &sf);
+    entry.asset_kind = .mesh;
+    const info = try sf.getFileInfo(tmp.dir, testing.io);
+
+    try testing.expectEqual(Staleness.stale_project_id, Staleness.check(&entry, info, null, currentHostOsName(), true).verdict);
+    try testing.expectEqual(Staleness.cached, Staleness.check(&entry, info, null, currentHostOsName(), false).verdict);
+    entry.asset_kind = .texture;
+    try testing.expectEqual(Staleness.cached, Staleness.check(&entry, info, null, currentHostOsName(), true).verdict);
 }
