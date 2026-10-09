@@ -91,57 +91,55 @@ pub const RawVertex = struct {
         return quantizeUV(uv, &bounds);
     }
 
-    pub fn quantizeTangent(self: *const RawVertex) ?[4]f16 {
-        if (self.tangent) |tangent| {
-            var result: [4]f16 = undefined;
-            for (0..4) |i| {
-                result[i] = @floatCast(tangent[i]);
-            }
-
-            return result;
-        }
-
-        return null;
+    /// Octahedral tangent as snorm8 `{ oct.x, oct.y, handedness sign, 0 }`.
+    pub fn encodeTangentOctahedral(self: *const RawVertex) ?[4]i8 {
+        const tangent = self.tangent orelse return null;
+        const oct = octEncode(.{ tangent[0], tangent[1], tangent[2] }, .{ 1, 0, 0 });
+        return .{
+            @intFromFloat(@round(oct[0] * 127.0)),
+            @intFromFloat(@round(oct[1] * 127.0)),
+            if (tangent[3] < 0.0) -127 else 127,
+            0,
+        };
     }
 
-    pub fn quantizeJointWeights(self: *const RawVertex) ?[4]f16 {
-        if (self.joint_weights) |weights| {
-            var result: [4]f16 = undefined;
-            for (0..4) |i| {
-                result[i] = @floatCast(weights[i]);
-            }
-
-            return result;
+    /// unorm8 weights renormalized to sum to exactly 255 (largest remainder).
+    pub fn quantizeJointWeights(self: *const RawVertex) ?[4]u8 {
+        const weights = self.joint_weights orelse return null;
+        // Negative and non-finite weights count as 0.
+        var clean: [4]f32 = undefined;
+        var sum: f32 = 0;
+        for (weights, &clean) |w, *c| {
+            c.* = if (std.math.isFinite(w) and w > 0.0) w else 0.0;
+            sum += c.*;
         }
+        if (!(sum > 0.0) or !std.math.isFinite(sum)) return .{ 255, 0, 0, 0 };
 
-        return null;
+        var result: [4]u8 = undefined;
+        var remainders: [4]f32 = undefined;
+        var total: u32 = 0;
+        for (clean, 0..) |w, i| {
+            const scaled = @min(w / sum * 255.0, 255.0);
+            const floored = @floor(scaled);
+            result[i] = @intFromFloat(floored);
+            remainders[i] = scaled - floored;
+            total += result[i];
+        }
+        while (total < 255) : (total += 1) {
+            const i = std.mem.indexOfMax(f32, &remainders);
+            result[i] += 1;
+            remainders[i] = -1;
+        }
+        return result;
     }
 
     pub fn encodeNormalOctahedral(self: *const RawVertex) ?[2]i16 {
-        if (self.normal) |normal| {
-            const abs_sum = @abs(normal[0]) + @abs(normal[1]) + @abs(normal[2]);
-
-            // Project onto octahedron
-            var oct: [2]f32 = .{
-                normal[0] / abs_sum,
-                normal[1] / abs_sum,
-            };
-
-            // Fold for negative z hemisphere
-            if (normal[2] < 0.0) {
-                const ox = oct[0];
-                const oy = oct[1];
-                oct[0] = (1.0 - @abs(oy)) * signNonZero(ox);
-                oct[1] = (1.0 - @abs(ox)) * signNonZero(oy);
-            }
-
-            return .{
-                @intFromFloat(oct[0] * 32767.0),
-                @intFromFloat(oct[1] * 32767.0),
-            };
-        }
-
-        return null;
+        const normal = self.normal orelse return null;
+        const oct = octEncode(normal, .{ 0, 0, 1 });
+        return .{
+            @intFromFloat(@round(oct[0] * 32767.0)),
+            @intFromFloat(@round(oct[1] * 32767.0)),
+        };
     }
 
     /// Like std.math.sign but returns 1.0 for zero (needed for octahedral fold).
@@ -149,16 +147,50 @@ pub const RawVertex = struct {
         return if (x >= 0.0) 1.0 else -1.0;
     }
 
+    /// Octahedral projection into [-1, 1]². Zero-length or non-finite input
+    /// encodes `fallback`.
+    fn octEncode(v: [3]f32, fallback: [3]f32) [2]f32 {
+        const abs_sum = @abs(v[0]) + @abs(v[1]) + @abs(v[2]);
+        const n = if (abs_sum > 1e-20 and std.math.isFinite(abs_sum)) v else fallback;
+        const s = @abs(n[0]) + @abs(n[1]) + @abs(n[2]);
+        var oct: [2]f32 = .{ n[0] / s, n[1] / s };
+
+        // Fold for negative z hemisphere
+        if (n[2] < 0.0) {
+            const ox = oct[0];
+            const oy = oct[1];
+            oct[0] = (1.0 - @abs(oy)) * signNonZero(ox);
+            oct[1] = (1.0 - @abs(ox)) * signNonZero(oy);
+        }
+        return oct;
+    }
+
     fn quantizeUV(uv: [2]f32, bounds: *const UV0Bounds) [2]u16 {
         var result: [2]u16 = undefined;
         for (0..2) |i| {
-            const clamped = std.math.clamp((uv[i] - bounds.min[i]) / bounds.scale[i], 0.0, 1.0);
-            result[i] = @intFromFloat(clamped * 65535.0);
+            result[i] = quantizeUnorm16((uv[i] - bounds.min[i]) / bounds.scale[i]);
         }
 
         return result;
     }
 };
+
+/// Rounds `t` (clamped to [0, 1]) to a u16 unorm. NaN maps to 0.
+pub fn quantizeUnorm16(t: f32) u16 {
+    const clamped = if (t > 0.0) @min(t, 1.0) else 0.0;
+    return @intFromFloat(@round(clamped * 65535.0));
+}
+
+/// Position as u16 unorm relative to the mesh AABB; w is 0. Flat axes
+/// quantize to 0, so `min + q * (max - min)` reconstructs them exactly.
+pub fn quantizePosition(position: [3]f32, min: [3]f32, max: [3]f32) [4]u16 {
+    var result: [4]u16 = .{ 0, 0, 0, 0 };
+    for (0..3) |i| {
+        const extent = max[i] - min[i];
+        if (extent > 0.0) result[i] = quantizeUnorm16((position[i] - min[i]) / extent);
+    }
+    return result;
+}
 
 fn hashOptional(hasher: *std.hash.XxHash64, optional: anytype) void {
     if (optional) |value| {
@@ -1337,118 +1369,79 @@ test "quantizeUV maps the normalized range to all u16 values" {
     try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
-test "quantizeUV maps 0.5 to midpoint" {
+test "quantizeUV rounds to nearest" {
     const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
-    const result = RawVertex.quantizeUV(.{ 0.5, 0.5 }, &bounds);
-    try std.testing.expectEqual(@as(u16, 32767), result[0]);
-    try std.testing.expectEqual(@as(u16, 32767), result[1]);
+    try std.testing.expectEqual([2]u16{ 32768, 32768 }, RawVertex.quantizeUV(.{ 0.5, 0.5 }, &bounds));
+    try std.testing.expectEqual([2]u16{ 16384, 49151 }, RawVertex.quantizeUV(.{ 0.25, 0.75 }, &bounds));
 }
 
-test "quantizeUV clamps values below 0" {
+test "quantizeUV clamps out-of-range and NaN values" {
     const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
-    const result = RawVertex.quantizeUV(.{ -0.5, -1.0 }, &bounds);
-    try std.testing.expectEqual(@as(u16, 0), result[0]);
-    try std.testing.expectEqual(@as(u16, 0), result[1]);
+    try std.testing.expectEqual([2]u16{ 0, 0 }, RawVertex.quantizeUV(.{ -0.5, std.math.nan(f32) }, &bounds));
+    try std.testing.expectEqual([2]u16{ 65535, 65535 }, RawVertex.quantizeUV(.{ 1.5, 2.0 }, &bounds));
 }
 
-test "quantizeUV clamps values above 1" {
-    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
-    const result = RawVertex.quantizeUV(.{ 1.5, 2.0 }, &bounds);
-    try std.testing.expectEqual(@as(u16, 65535), result[0]);
-    try std.testing.expectEqual(@as(u16, 65535), result[1]);
-}
-
-test "quantizeUV handles independent channels" {
-    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
-    const result = RawVertex.quantizeUV(.{ 0.25, 0.75 }, &bounds);
-    try std.testing.expectEqual(@as(u16, 16383), result[0]);
-    try std.testing.expectEqual(@as(u16, 49151), result[1]);
-}
-
-test "quantizeUV0 returns quantized value when present" {
-    var v = makeVertex(0, 0, 0);
-    v.uv0 = .{ 0.0, 1.0 };
-    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
-    const result = v.quantizeUV0(&bounds).?;
-    try std.testing.expectEqual(@as(u16, 0), result[0]);
-    try std.testing.expectEqual(@as(u16, 65535), result[1]);
-}
-
-test "quantizeUV0 returns null when absent" {
+test "quantizeUV0 and quantizeUV1 return null when absent" {
     const v = makeVertex(0, 0, 0);
     const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
     try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV0(&bounds));
-}
-
-test "quantizeUV1 returns quantized value when present" {
-    var v = makeVertex(0, 0, 0);
-    v.uv1 = .{ 0.5, 0.25 };
-    const result = v.quantizeUV1().?;
-    try std.testing.expectEqual(@as(u16, 32767), result[0]);
-    try std.testing.expectEqual(@as(u16, 16383), result[1]);
-}
-
-test "quantizeUV1 returns null when absent" {
-    const v = makeVertex(0, 0, 0);
     try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV1());
 }
 
-test "quantizeTangent converts f32 to f16" {
+test "quantizeUV1 quantizes over [0, 1]" {
     var v = makeVertex(0, 0, 0);
-    v.tangent = .{ 1.0, 0.0, 0.0, 1.0 };
-    const result = v.quantizeTangent().?;
-    try std.testing.expectEqual(@as(f16, 1.0), result[0]);
-    try std.testing.expectEqual(@as(f16, 0.0), result[1]);
-    try std.testing.expectEqual(@as(f16, 0.0), result[2]);
-    try std.testing.expectEqual(@as(f16, 1.0), result[3]);
+    v.uv1 = .{ 0.5, 0.25 };
+    try std.testing.expectEqual([2]u16{ 32768, 16384 }, v.quantizeUV1().?);
 }
 
-test "quantizeTangent returns null when absent" {
-    const v = makeVertex(0, 0, 0);
-    try std.testing.expectEqual(@as(?[4]f16, null), v.quantizeTangent());
+test "quantizePosition maps the AABB to the full u16 range" {
+    const min: [3]f32 = .{ -1, 0, 5 };
+    const max: [3]f32 = .{ 1, 10, 5 };
+    try std.testing.expectEqual([4]u16{ 0, 0, 0, 0 }, quantizePosition(.{ -1, 0, 5 }, min, max));
+    try std.testing.expectEqual([4]u16{ 65535, 65535, 0, 0 }, quantizePosition(.{ 1, 10, 5 }, min, max));
+    try std.testing.expectEqual([4]u16{ 32768, 6554, 0, 0 }, quantizePosition(.{ 0, 1, 5 }, min, max));
 }
 
-test "quantizeTangent preserves negative values" {
+test "encodeTangentOctahedral round-trips direction and handedness" {
     var v = makeVertex(0, 0, 0);
-    v.tangent = .{ -1.0, 0.5, -0.5, -1.0 };
-    const result = v.quantizeTangent().?;
-    try std.testing.expectEqual(@as(f16, -1.0), result[0]);
-    try std.testing.expectEqual(@as(f16, 0.5), result[1]);
-    try std.testing.expectEqual(@as(f16, -0.5), result[2]);
-    try std.testing.expectEqual(@as(f16, -1.0), result[3]);
+    try std.testing.expectEqual(@as(?[4]i8, null), v.encodeTangentOctahedral());
+    v.tangent = .{ 1, 0, 0, 1 };
+    try std.testing.expectEqual([4]i8{ 127, 0, 127, 0 }, v.encodeTangentOctahedral().?);
+    v.tangent = .{ 0, 0, -1, -1 };
+    const t = v.encodeTangentOctahedral().?;
+    try std.testing.expectEqual(@as(i8, -127), t[2]);
+    const decoded = decodeOctahedral(.{ @as(i16, t[0]) * 258, @as(i16, t[1]) * 258 });
+    try expectNormalApproxEq(.{ 0, 0, -1 }, decoded, 0.01);
 }
 
-test "quantizeJointWeights converts f32 to f16" {
+test "quantizeJointWeights renormalizes to sum 255" {
     var v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[4]u8, null), v.quantizeJointWeights());
     v.joint_weights = .{ 1.0, 0.0, 0.0, 0.0 };
-    const result = v.quantizeJointWeights().?;
-    try std.testing.expectEqual(@as(f16, 1.0), result[0]);
-    try std.testing.expectEqual(@as(f16, 0.0), result[1]);
-    try std.testing.expectEqual(@as(f16, 0.0), result[2]);
-    try std.testing.expectEqual(@as(f16, 0.0), result[3]);
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 0 }, v.quantizeJointWeights().?);
+    v.joint_weights = .{ 0.0, 0.0, 0.0, 0.0 };
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 0 }, v.quantizeJointWeights().?);
+    v.joint_weights = .{ std.math.inf(f32), 0.0, 0.0, 0.0 };
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 0 }, v.quantizeJointWeights().?);
+    v.joint_weights = .{ std.math.nan(f32), 0.5, -1.0, 0.5 };
+    try std.testing.expectEqual([4]u8{ 0, 128, 0, 127 }, v.quantizeJointWeights().?);
+    v.joint_weights = .{ std.math.floatMax(f32), std.math.floatMax(f32), 0.0, 0.0 };
+    const huge = v.quantizeJointWeights().?;
+    try std.testing.expectEqual(@as(u32, 255), @as(u32, huge[0]) + huge[1] + huge[2] + huge[3]);
+
+    var prng = std.Random.DefaultPrng.init(9);
+    const random = prng.random();
+    for (0..1000) |_| {
+        v.joint_weights = .{ random.float(f32), random.float(f32), random.float(f32), random.float(f32) * 0.01 };
+        const w = v.quantizeJointWeights().?;
+        try std.testing.expectEqual(@as(u32, 255), @as(u32, w[0]) + w[1] + w[2] + w[3]);
+    }
 }
 
-test "quantizeJointWeights returns null when absent" {
-    const v = makeVertex(0, 0, 0);
-    try std.testing.expectEqual(@as(?[4]f16, null), v.quantizeJointWeights());
-}
-
-test "quantizeJointWeights handles fractional weights" {
+test "encodeNormalOctahedral maps zero-length normals to +Z" {
     var v = makeVertex(0, 0, 0);
-    v.joint_weights = .{ 0.5, 0.25, 0.125, 0.125 };
-    const result = v.quantizeJointWeights().?;
-    try std.testing.expectEqual(@as(f16, 0.5), result[0]);
-    try std.testing.expectEqual(@as(f16, 0.25), result[1]);
-    try std.testing.expectEqual(@as(f16, 0.125), result[2]);
-    try std.testing.expectEqual(@as(f16, 0.125), result[3]);
-}
-
-test "quantizeJointWeights still sum to 1 after quantization" {
-    var v = makeVertex(0, 0, 0);
-    v.joint_weights = .{ 0.6, 0.2, 0.15, 0.05 };
-    const result = v.quantizeJointWeights().?;
-    const sum: f16 = result[0] + result[1] + result[2] + result[3];
-    try std.testing.expectApproxEqAbs(@as(f16, 1.0), sum, 0.01);
+    v.normal = .{ 0, 0, 0 };
+    try std.testing.expectEqual([2]i16{ 0, 0 }, v.encodeNormalOctahedral().?);
 }
 
 /// Decode octahedral-encoded normal back to a unit vector (test helper).

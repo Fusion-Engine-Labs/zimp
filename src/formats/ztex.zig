@@ -76,6 +76,7 @@ pub const Zatex = struct {
             expected_width = @max(1, expected_width / 2);
             expected_height = @max(1, expected_height / 2);
         }
+        try order.finish(bytes.len);
 
         return .{
             .bytes = bytes,
@@ -301,7 +302,7 @@ test "Zatex.view rejects overlapping mip sections" {
     try testing.expectError(error.OverlappingSections, Zatex.view(bytes));
 }
 
-test "Zatex.view rejects mip sections pointing outside the file" {
+test "Zatex.view rejects mip sections moved outside the file" {
     var cooked = try makeCookedTexture(testing.allocator, 4, 4, .r8, .linear, 1);
     defer cooked.deinit(testing.allocator);
 
@@ -310,5 +311,5 @@ test "Zatex.view rejects mip sections pointing outside the file" {
 
     const data_offset = HEADER_SIZE + @offsetOf(MipEntry, "data");
     std.mem.writeInt(u32, buf[data_offset..][0..4], 4096, .little);
-    try testing.expectError(error.Truncated, Zatex.view(buf[0..len]));
+    try testing.expectError(error.InvalidLayout, Zatex.view(buf[0..len])); // not at the canonical offset
 }

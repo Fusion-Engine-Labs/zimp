@@ -63,6 +63,7 @@ pub const ZShader = struct {
 
         var order = wire.SectionOrder.init(HEADER_SIZE);
         for ([_]wire.Span{ header.variant_names, header.includes, header.permutations, header.strings }) |span| try order.next(span);
+        try order.finish(bytes.len);
 
         const strings = try wire.sectionSlice(u8, bytes, header.strings, header.strings.len);
         const variant_names = try wire.sectionSlice(wire.Span, bytes, header.variant_names, header.variant_count);

@@ -100,12 +100,13 @@ pub const SchemaId = id.types.SchemaId;
 
 pub const ZMesh = formats.zmesh.ZMesh;
 pub const ZMeshHeader = formats.zmesh.Header;
-pub const MeshPart = formats.zmesh.MeshPart;
+pub const MeshPart = formats.zmesh.ZMesh.Part;
+pub const MeshStream = formats.zmesh.Stream;
+pub const MeshCodec = formats.zmesh.Codec;
 pub const FormatFlags = assets.cooked.mesh.FormatFlags;
 pub const CookedVertex = assets.cooked.mesh.CookedVertex;
 pub const AABB = assets.cooked.mesh.AABB;
 pub const IndexFormat = assets.cooked.mesh.IndexFormat;
-pub const IndexBuffer = assets.cooked.mesh.IndexBuffer;
 pub const CookedMesh = assets.cooked.mesh.CookedMesh;
 pub const Zatex = formats.ztex.Zatex;
 pub const ZatexHeader = formats.ztex.Header;

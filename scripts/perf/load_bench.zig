@@ -4,9 +4,12 @@
 //!
 //! Prints one JSON object per asset kind found under `cooked_dir`. Each pass
 //! loads and frees every file of that kind once; the page cache is warmed
-//! first, so results measure deserialization rather than disk speed. Only
-//! `loadFromFile`, `detectKind`, and `Asset.deinit` are used, so the same
-//! source builds against older zimp revisions for before/after comparisons.
+//! first, so results measure deserialization rather than disk speed. Meshes
+//! with encoded streams (zmesh v7+) are also decoded into a scratch buffer,
+//! since that is the cost of getting them ready to upload. Other than that
+//! decode (feature-detected with `@hasDecl`), only `loadFromFile`,
+//! `detectKind`, and `Asset.deinit` are used, so the same source builds
+//! against older zimp revisions for before/after comparisons.
 
 const std = @import("std");
 const zimp = @import("zimp");
@@ -82,6 +85,25 @@ fn loadAll(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, paths: []const [
     for (paths) |path| {
         var asset = try runtime.loadFromFile(gpa, io, dir, path);
         std.mem.doNotOptimizeAway(&asset);
+        if (comptime @hasDecl(zimp.ZMesh, "decodeStream")) {
+            if (asset.view == .mesh) try decodeMesh(gpa, &asset.view.mesh);
+        }
         asset.deinit(gpa);
     }
+}
+
+fn decodeMesh(gpa: std.mem.Allocator, model: *const zimp.ZMesh) !void {
+    var largest = model.decodedIndexSize();
+    for (std.enums.values(zimp.MeshStream)) |stream| {
+        if (model.hasStream(stream)) largest = @max(largest, model.decodedStreamSize(stream));
+    }
+    const scratch = try gpa.alignedAlloc(u8, .@"4", largest);
+    defer gpa.free(scratch);
+    for (std.enums.values(zimp.MeshStream)) |stream| {
+        if (!model.hasStream(stream)) continue;
+        try model.decodeStream(stream, scratch[0..model.decodedStreamSize(stream)]);
+        std.mem.doNotOptimizeAway(scratch.ptr);
+    }
+    try model.decodeIndices(scratch[0..model.decodedIndexSize()]);
+    std.mem.doNotOptimizeAway(scratch.ptr);
 }

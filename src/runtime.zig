@@ -125,8 +125,8 @@ test "loadFromFile loads zmesh as an in-place view" {
     try testing.expect(asset.view == .mesh);
     const model = asset.view.mesh;
     try testing.expectEqual(@as(usize, 1), model.partCount());
-    const positions = model.part(0).mesh.positions;
-    try testing.expectEqual(@as(usize, 3), positions.len);
+    try testing.expectEqual(@as(u32, 3), model.vertexCount());
+    const positions = model.streamBytes(.positions);
     const offset = @intFromPtr(positions.ptr) - @intFromPtr(asset.bytes.ptr);
     try testing.expect(offset < asset.bytes.len);
 }

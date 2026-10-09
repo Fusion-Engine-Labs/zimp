@@ -31,5 +31,5 @@ fn cookObj(input: *const CookInput) !void {
     defer input.allocator.free(material_path);
 
     const material_ids = [_]zmesh.AssetId{try input.referenceId(material_path)};
-    try zmesh.ZMesh.write(input.writer, &material_ids, &parts);
+    try zmesh.ZMesh.write(input.allocator, input.writer, &material_ids, &parts, .{});
 }

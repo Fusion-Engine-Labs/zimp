@@ -105,9 +105,11 @@ pub fn sectionSlice(comptime T: type, bytes: Bytes, span: Span, count: usize) ![
     return sliceAt(T, bytes, span.offset, count);
 }
 
-/// Enforces that sections appear in write order without overlapping. A file
-/// that passes has exactly the layout `Layout` produces, so section sizes can
-/// never sum past the file length.
+/// Enforces that sections appear exactly where `Layout` puts them: in write
+/// order, each at the next aligned offset, with empty sections as zero spans
+/// and nothing after the last section. A file that passes has exactly the
+/// layout the writer produces, so section sizes can never sum past the file
+/// length.
 pub const SectionOrder = struct {
     end: u64,
 
@@ -115,11 +117,21 @@ pub const SectionOrder = struct {
         return .{ .end = fixed_bytes };
     }
 
-    /// Empty sections occupy no bytes and are ignored.
     pub fn next(self: *SectionOrder, span: Span) !void {
-        if (span.len == 0) return;
+        if (span.len == 0) {
+            if (span.offset != 0) return error.InvalidLayout;
+            return;
+        }
         if (span.offset < self.end) return error.OverlappingSections;
+        if (span.offset % section_alignment != 0) return error.MisalignedSection;
+        if (span.offset != alignSection(self.end)) return error.InvalidLayout;
         self.end = span.end();
+    }
+
+    /// The last section must end the file.
+    pub fn finish(self: SectionOrder, file_len: usize) !void {
+        if (self.end > file_len) return error.Truncated;
+        if (self.end != file_len) return error.InvalidLayout;
     }
 };
 
@@ -271,6 +283,17 @@ test "SectionOrder rejects overlapping and out-of-order sections" {
     try std.testing.expectError(error.OverlappingSections, order.next(.{ .offset = 32, .len = 1 }));
     try order.next(.{ .offset = 48, .len = 1 });
     try std.testing.expectError(error.OverlappingSections, order.next(.{ .offset = 16, .len = 1 }));
+}
+
+test "SectionOrder rejects gaps, stray empty offsets, and trailing bytes" {
+    var order = SectionOrder.init(32);
+    try std.testing.expectError(error.InvalidLayout, order.next(.{ .offset = 64, .len = 8 }));
+    try std.testing.expectError(error.MisalignedSection, order.next(.{ .offset = 36, .len = 8 }));
+    try std.testing.expectError(error.InvalidLayout, order.next(.{ .offset = 0xfffffff0, .len = 0 }));
+    try order.next(.{ .offset = 32, .len = 8 });
+    try std.testing.expectError(error.InvalidLayout, order.finish(48));
+    try std.testing.expectError(error.Truncated, order.finish(39));
+    try order.finish(40);
 }
 
 test "sliceAt rejects out-of-bounds and misaligned views" {
