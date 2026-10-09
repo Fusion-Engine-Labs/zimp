@@ -214,6 +214,7 @@ test {
     _ = @import("assets/cooked/mesh.zig");
     _ = @import("assets/cooked/texture.zig");
     _ = @import("assets/cooked/shader.zig");
+    _ = @import("assets/cooked/glsl_minify.zig");
     _ = @import("assets/cooked/material.zig");
     _ = @import("formats/zshdr.zig");
     _ = @import("formats/zamat.zig");

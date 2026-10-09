@@ -128,23 +128,11 @@ test "InspectCommand.run succeeds for valid zshdr file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const variant_names = try string_list.dupeStringList(testing.allocator, &.{"SKINNED"});
-    const includes = try string_list.dupeStringList(testing.allocator, &.{});
-    const permutations = try testing.allocator.alloc(CookedShader.Permutation, 2);
-    permutations[0] = .{
-        .key = .base,
-        .source = try testing.allocator.dupe(u8, "#version 330 core\nvoid main() {}\n"),
-    };
-    permutations[1] = .{
-        .key = zshdr.VariantKey.base.with(0),
-        .source = try testing.allocator.dupe(u8, "#version 330 core\n#define SKINNED\nvoid main() {}\n"),
-    };
-
     var cooked = CookedShader{
         .stage = .vertex,
-        .variant_names = variant_names,
-        .includes = includes,
-        .permutations = permutations,
+        .variant_names = try string_list.dupeStringList(testing.allocator, &.{"SKINNED"}),
+        .prologue = try testing.allocator.dupe(u8, "#version 330 core\n"),
+        .body = try testing.allocator.dupe(u8, "void main(){}\n"),
     };
     defer cooked.deinit(testing.allocator);
 

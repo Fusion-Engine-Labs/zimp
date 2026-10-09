@@ -6,6 +6,9 @@ const path_helpers = @import("../../path.zig");
 const log = @import("../../logger.zig");
 const asset = @import("../asset.zig");
 
+/// Variant bits are a u32, so a stage declares at most 32 variants.
+pub const max_variants = 32;
+
 pub const VariantKey = struct {
     bits: u32,
 
@@ -314,6 +317,10 @@ pub fn parseVariantNames(source: []const u8, allocator: std.mem.Allocator) ![]co
             if (!isValidVariantName(name)) {
                 return error.InvalidVariantName;
             }
+            for (variants.items) |existing| {
+                if (std.mem.eql(u8, existing, name)) return error.DuplicateVariantName;
+            }
+            if (variants.items.len == max_variants) return error.TooManyShaderVariants;
 
             try variants.append(allocator, try allocator.dupe(u8, name));
         }
@@ -330,70 +337,7 @@ pub fn freeVariantNames(allocator: std.mem.Allocator, variants: []const []const 
     allocator.free(variants);
 }
 
-pub fn generateVariantKeys(variant_count: usize, allocator: std.mem.Allocator) ![]VariantKey {
-    if (variant_count > 8) {
-        return error.TooManyShaderVariants;
-    }
-    const count: usize = @as(usize, 1) << @intCast(variant_count);
-    const keys = try allocator.alloc(VariantKey, count);
-    for (keys, 0..) |*key, i| {
-        key.* = .fromBits(@intCast(i));
-    }
-    return keys;
-}
-
-pub fn makeVariantSource(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    variants: []const []const u8,
-    key: VariantKey,
-) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-
-    var emitted_defines = false;
-    var emitted_version = false;
-
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        if (isVariantDeclarationLine(line)) {
-            continue;
-        }
-
-        if (!emitted_defines and isVersionLine(line)) {
-            try out.appendSlice(allocator, line);
-            try out.append(allocator, '\n');
-            try appendDefines(&out, allocator, variants, key);
-            emitted_defines = true;
-            emitted_version = true;
-            continue;
-        }
-
-        if (!emitted_defines and !emitted_version and !isBlankOrComment(line)) {
-            try appendDefines(&out, allocator, variants, key);
-            emitted_defines = true;
-        }
-
-        try out.appendSlice(allocator, line);
-        try out.append(allocator, '\n');
-    }
-
-    if (!emitted_defines) {
-        try appendDefines(&out, allocator, variants, key);
-    }
-
-    return out.toOwnedSlice(allocator);
-}
-
-fn appendDefines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, variants: []const []const u8, key: VariantKey) !void {
-    for (variants, 0..) |name, i| {
-        if (key.has(i)) {
-            try out.print(allocator, "#define {s}\n", .{name});
-        }
-    }
-}
-
-fn isVersionLine(line: []const u8) bool {
+pub fn isVersionLine(line: []const u8) bool {
     const trimmed = std.mem.trim(u8, line, " \t\r");
     if (!std.mem.startsWith(u8, trimmed, "#version")) return false;
     if (trimmed.len == "#version".len) return true;
@@ -401,19 +345,7 @@ fn isVersionLine(line: []const u8) bool {
     return next == ' ' or next == '\t';
 }
 
-fn isVariantDeclarationLine(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t\r");
-    if (!std.mem.startsWith(u8, trimmed, "//")) return false;
-    const after_comment = std.mem.trim(u8, trimmed[2..], " \t");
-    return std.mem.startsWith(u8, after_comment, "VARIANTS:");
-}
-
-fn isBlankOrComment(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t\r");
-    return trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//");
-}
-
-fn isValidVariantName(name: []const u8) bool {
+pub fn isValidVariantName(name: []const u8) bool {
     if (name.len == 0) return false;
     if (!isIdentStart(name[0])) return false;
     for (name[1..]) |c| {
@@ -553,28 +485,14 @@ test "parseVariantNames handles whitespace" {
     try testing.expectEqualStrings("HAS_AO", variants[2]);
 }
 
-test "generateVariantKeys returns all bitmasks" {
-    const keys = try generateVariantKeys(2, testing.allocator);
-    defer testing.allocator.free(keys);
+test "parseVariantNames rejects duplicates and more than 32 names" {
+    try testing.expectError(error.DuplicateVariantName, parseVariantNames("// VARIANTS: A, B, A\n", testing.allocator));
 
-    try testing.expectEqual(VariantKey.fromBits(0), keys[0]);
-    try testing.expectEqual(VariantKey.fromBits(1), keys[1]);
-    try testing.expectEqual(VariantKey.fromBits(2), keys[2]);
-    try testing.expectEqual(VariantKey.fromBits(3), keys[3]);
-}
-
-test "makeVariantSource inserts defines after version and strips variants line" {
-    const variants = [_][]const u8{ "SKINNED", "HAS_NORMAL_MAP" };
-    const out = try makeVariantSource(
-        testing.allocator,
-        "#version 330 core\n// VARIANTS: SKINNED, HAS_NORMAL_MAP\nvoid main() {}\n",
-        &variants,
-        .fromBits(3),
-    );
-    defer testing.allocator.free(out);
-
-    try testing.expect(std.mem.startsWith(u8, out, "#version 330 core\n#define SKINNED\n#define HAS_NORMAL_MAP\n"));
-    try testing.expect(std.mem.indexOf(u8, out, "VARIANTS") == null);
+    var many: std.ArrayList(u8) = .empty;
+    defer many.deinit(testing.allocator);
+    try many.appendSlice(testing.allocator, "// VARIANTS: ");
+    for (0..33) |i| try many.print(testing.allocator, "V{d},", .{i});
+    try testing.expectError(error.TooManyShaderVariants, parseVariantNames(many.items, testing.allocator));
 }
 
 fn writeTestFile(dir: std.Io.Dir, path: []const u8, content: []const u8) !void {

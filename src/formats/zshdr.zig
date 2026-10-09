@@ -3,44 +3,39 @@ const string_list = @import("../shared/string_list.zig");
 
 const constants = @import("../shared/constants.zig");
 const cooked_shader = @import("../assets/cooked/shader.zig");
+const raw_shader = @import("../assets/raw/shader.zig");
 const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZSHDR;
-pub const ZSHDR_VERSION: u32 = 2;
+pub const ZSHDR_VERSION: u32 = 3;
 
 pub const ShaderStage = cooked_shader.ShaderStage;
 pub const VariantKey = cooked_shader.VariantKey;
 pub const CookedShader = cooked_shader.CookedShader;
 
-const max_variants = 32;
-const max_includes = 4096;
-const max_permutations = 65536;
+pub const max_variants = 32;
+const define_prefix = "#define ";
 
-/// File layout: `Header`, then aligned sections: variant name refs, include
-/// refs, the `PermutationEntry` table (sorted by key), and one string blob
-/// holding names, includes, and sources.
+/// File layout: `Header`, then two aligned sections: the variant table (one
+/// string ref per variant, each a `#define NAME\n` line) and one string blob
+/// holding the define lines, the prologue, and the body, in that order.
+///
+/// A variant's source is `prologue ++ defines for set bits ++ body`. The
+/// prologue runs through the `#version` line (after any blank lines), or is
+/// empty when the shader does not start with one.
 pub const Header = extern struct {
     file: wire.FileHeader,
     stage: u8,
     _reserved0: u8 = 0,
     variant_count: u16,
-    include_count: u16,
-    _reserved1: u16 = 0,
-    permutation_count: u32,
-    variant_names: wire.Span,
-    includes: wire.Span,
-    permutations: wire.Span,
+    variant_defines: wire.Span,
+    prologue: wire.Span,
+    body: wire.Span,
     strings: wire.Span,
-};
-
-pub const PermutationEntry = extern struct {
-    key: u32,
-    source: wire.Span,
 };
 
 comptime {
     wire.assertTightLayout(Header);
-    wire.assertTightLayout(PermutationEntry);
 }
 
 pub const HEADER_SIZE: u32 = @sizeOf(Header);
@@ -48,80 +43,92 @@ pub const HEADER_SIZE: u32 = @sizeOf(Header);
 /// Zero-copy view of a cooked shader stage. Borrows the bytes it was created from.
 pub const ZShader = struct {
     stage: ShaderStage,
-    variant_name_refs: []const wire.Span,
-    include_refs: []const wire.Span,
-    permutations: []const PermutationEntry,
+    variant_define_refs: []const wire.Span,
+    prologue: []const u8,
+    body: []const u8,
     strings: []const u8,
+
+    /// Source pieces for one variant, ready for `glShaderSource`.
+    pub const SourceParts = [max_variants + 2][]const u8;
 
     pub fn view(bytes: wire.Bytes) !ZShader {
         _ = try wire.FileHeader.validate(bytes, MAGIC, ZSHDR_VERSION);
         const header = try wire.structAt(Header, bytes, 0);
         const stage = try wire.enumFromInt(ShaderStage, header.stage);
         if (header.variant_count > max_variants) return error.TooManyVariants;
-        if (header.include_count > max_includes) return error.TooManyIncludes;
-        if (header.permutation_count > max_permutations) return error.TooManyPermutations;
 
         var order = wire.SectionOrder.init(HEADER_SIZE);
-        for ([_]wire.Span{ header.variant_names, header.includes, header.permutations, header.strings }) |span| try order.next(span);
+        for ([_]wire.Span{ header.variant_defines, header.strings }) |span| try order.next(span);
         try order.finish(bytes.len);
 
         const strings = try wire.sectionSlice(u8, bytes, header.strings, header.strings.len);
-        const variant_names = try wire.sectionSlice(wire.Span, bytes, header.variant_names, header.variant_count);
-        const includes = try wire.sectionSlice(wire.Span, bytes, header.includes, header.include_count);
-        const permutations = try wire.sectionSlice(PermutationEntry, bytes, header.permutations, header.permutation_count);
-        for (variant_names) |ref| try wire.checkString(strings, ref);
-        for (includes) |ref| try wire.checkString(strings, ref);
+        const defines = try wire.sectionSlice(wire.Span, bytes, header.variant_defines, header.variant_count);
 
-        const valid_key_mask: u64 = (@as(u64, 1) << @intCast(header.variant_count)) - 1;
-        var previous: ?u32 = null;
-        for (permutations) |entry| {
-            if (entry.key & ~valid_key_mask != 0) return error.InvalidVariantKey;
-            if (previous) |p| if (entry.key <= p) return error.UnsortedPermutations;
-            previous = entry.key;
-            try wire.checkString(strings, entry.source);
+        // Strings are packed back to back in write order and fill the blob exactly.
+        var cursor: u64 = 0;
+        for (defines, 0..) |ref, i| {
+            try nextString(strings, ref, &cursor);
+            const name = defineName(wire.stringAt(strings, ref)) orelse return error.InvalidVariantDefine;
+            for (defines[0..i]) |other| {
+                if (std.mem.eql(u8, name, defineName(wire.stringAt(strings, other)).?)) return error.DuplicateVariant;
+            }
         }
+        try nextString(strings, header.prologue, &cursor);
+        try nextString(strings, header.body, &cursor);
+        if (cursor != strings.len) return error.InvalidStringRef;
+
+        const prologue = wire.stringAt(strings, header.prologue);
+        if (!isValidPrologue(prologue)) return error.InvalidPrologue;
 
         return .{
             .stage = stage,
-            .variant_name_refs = variant_names,
-            .include_refs = includes,
-            .permutations = permutations,
+            .variant_define_refs = defines,
+            .prologue = prologue,
+            .body = wire.stringAt(strings, header.body),
             .strings = strings,
         };
     }
 
     pub fn variantCount(self: *const ZShader) usize {
-        return self.variant_name_refs.len;
+        return self.variant_define_refs.len;
     }
 
     pub fn variantName(self: *const ZShader, index: usize) []const u8 {
-        return wire.stringAt(self.strings, self.variant_name_refs[index]);
+        const line = self.variantDefine(index);
+        return line[define_prefix.len .. line.len - 1];
     }
 
-    pub fn includeCount(self: *const ZShader) usize {
-        return self.include_refs.len;
+    /// The `#define NAME\n` line for a variant.
+    pub fn variantDefine(self: *const ZShader, index: usize) []const u8 {
+        return wire.stringAt(self.strings, self.variant_define_refs[index]);
     }
 
-    pub fn include(self: *const ZShader, index: usize) []const u8 {
-        return wire.stringAt(self.strings, self.include_refs[index]);
+    /// Returns the source of variant `key` as pieces to concatenate (or pass
+    /// as-is to `glShaderSource`): the prologue, one define per set bit in
+    /// bit order, then the body. The pieces borrow from the view.
+    pub fn sourceParts(self: *const ZShader, key: VariantKey, out: *SourceParts) ![]const []const u8 {
+        const count = self.variantCount();
+        if (count < 32 and key.bits >> @intCast(count) != 0) return error.InvalidVariantKey;
+
+        var len: usize = 0;
+        if (self.prologue.len > 0) {
+            out[len] = self.prologue;
+            len += 1;
+        }
+        for (0..count) |i| {
+            if (!key.has(i)) continue;
+            out[len] = self.variantDefine(i);
+            len += 1;
+        }
+        out[len] = self.body;
+        len += 1;
+        return out[0..len];
     }
 
-    pub fn permutationSource(self: *const ZShader, index: usize) []const u8 {
-        return wire.stringAt(self.strings, self.permutations[index].source);
-    }
-
-    pub fn baseSource(self: *const ZShader) ![]const u8 {
-        return self.sourceFor(.base);
-    }
-
-    pub fn sourceFor(self: *const ZShader, key: VariantKey) ![]const u8 {
-        const index = std.sort.binarySearch(PermutationEntry, self.permutations, key.bits, orderByKey) orelse
-            return error.ShaderPermutationNotFound;
-        return self.permutationSource(index);
-    }
-
-    fn orderByKey(key: u32, entry: PermutationEntry) std.math.Order {
-        return std.math.order(key, entry.key);
+    /// Concatenated source of variant `key`. Caller owns the result.
+    pub fn sourceAlloc(self: *const ZShader, allocator: std.mem.Allocator, key: VariantKey) ![]u8 {
+        var parts: SourceParts = undefined;
+        return std.mem.concat(allocator, u8, try self.sourceParts(key, &parts));
     }
 
     pub fn variantKey(self: *const ZShader, enabled_variants: []const []const u8) !VariantKey {
@@ -141,175 +148,257 @@ pub const ZShader = struct {
     }
 };
 
+fn nextString(strings: []const u8, ref: wire.Span, cursor: *u64) !void {
+    try wire.checkString(strings, ref);
+    if (ref.offset != cursor.*) return error.InvalidStringRef;
+    cursor.* = ref.end();
+}
+
+/// The identifier in a `#define NAME\n` line, or null if the line has any other shape.
+fn defineName(line: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, define_prefix) or !std.mem.endsWith(u8, line, "\n")) return null;
+    if (line.len < define_prefix.len + 1) return null;
+    const name = line[define_prefix.len .. line.len - 1];
+    return if (raw_shader.isValidVariantName(name)) name else null;
+}
+
+/// Empty, or blank lines followed by one `#version` line including its newline.
+pub fn isValidPrologue(prologue: []const u8) bool {
+    if (prologue.len == 0) return true;
+    const start = std.mem.indexOfNone(u8, prologue, "\n") orelse return false;
+    const newline = std.mem.indexOfScalarPos(u8, prologue, start, '\n') orelse return false;
+    const line = prologue[start..newline];
+    if (std.mem.endsWith(u8, std.mem.trimEnd(u8, line, "\r"), "\\")) return false;
+    return newline == prologue.len - 1 and raw_shader.isVersionLine(line);
+}
+
 pub fn view(bytes: wire.Bytes) !ZShader {
     return ZShader.view(bytes);
 }
 
 pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
     if (cooked.variant_names.len > max_variants) return error.TooManyVariants;
-    if (cooked.includes.len > max_includes) return error.TooManyIncludes;
-    if (cooked.permutations.len > max_permutations) return error.TooManyPermutations;
-    if (cooked.permutations.len > 1) {
-        for (cooked.permutations[1..], cooked.permutations[0 .. cooked.permutations.len - 1]) |perm, previous| {
-            if (perm.key.bits <= previous.key.bits) return error.UnsortedPermutations;
+    if (!isValidPrologue(cooked.prologue)) return error.InvalidPrologue;
+    for (cooked.variant_names, 0..) |name, i| {
+        if (!raw_shader.isValidVariantName(name)) return error.InvalidVariantName;
+        for (cooked.variant_names[0..i]) |other| {
+            if (std.mem.eql(u8, name, other)) return error.DuplicateVariant;
         }
     }
 
-    var string_bytes: usize = 0;
-    for (cooked.variant_names) |name| string_bytes += name.len;
-    for (cooked.includes) |name| string_bytes += name.len;
-    for (cooked.permutations) |perm| string_bytes += perm.source.len;
+    var string_bytes: usize = cooked.prologue.len + cooked.body.len;
+    for (cooked.variant_names) |name| string_bytes += defineLineLen(name);
 
     var layout = wire.Layout.init(HEADER_SIZE);
-    const variant_names = try layout.reserve(cooked.variant_names.len * @sizeOf(wire.Span));
-    const includes = try layout.reserve(cooked.includes.len * @sizeOf(wire.Span));
-    const permutations = try layout.reserve(cooked.permutations.len * @sizeOf(PermutationEntry));
+    const variant_defines = try layout.reserve(cooked.variant_names.len * @sizeOf(wire.Span));
     const strings = try layout.reserve(string_bytes);
     const total_size = layout.totalSize();
+
+    var string_offset: u32 = 0;
+    var define_refs: [max_variants]wire.Span = undefined;
+    for (cooked.variant_names, define_refs[0..cooked.variant_names.len]) |name, *ref| {
+        ref.* = nextRef(&string_offset, defineLineLen(name));
+    }
+    const prologue = nextRef(&string_offset, cooked.prologue.len);
+    const body = nextRef(&string_offset, cooked.body.len);
 
     var out: wire.LayoutWriter = .{ .writer = writer };
     try out.value(Header{
         .file = .init(MAGIC, ZSHDR_VERSION, total_size),
         .stage = @intFromEnum(cooked.stage),
         .variant_count = @intCast(cooked.variant_names.len),
-        .include_count = @intCast(cooked.includes.len),
-        .permutation_count = @intCast(cooked.permutations.len),
-        .variant_names = variant_names,
-        .includes = includes,
-        .permutations = permutations,
+        .variant_defines = variant_defines,
+        .prologue = prologue,
+        .body = body,
         .strings = strings,
     });
 
-    var string_offset: u32 = 0;
-    try out.beginSection(variant_names);
-    for (cooked.variant_names) |name| try out.value(nextString(&string_offset, name));
-    try out.beginSection(includes);
-    for (cooked.includes) |name| try out.value(nextString(&string_offset, name));
-    try out.beginSection(permutations);
-    for (cooked.permutations) |perm| {
-        try out.value(PermutationEntry{ .key = perm.key.bits, .source = nextString(&string_offset, perm.source) });
-    }
+    try out.beginSection(variant_defines);
+    try out.slice(define_refs[0..cooked.variant_names.len]);
 
     try out.beginSection(strings);
-    for (cooked.variant_names) |name| try out.bytes(name);
-    for (cooked.includes) |name| try out.bytes(name);
-    for (cooked.permutations) |perm| try out.bytes(perm.source);
+    for (cooked.variant_names) |name| {
+        try out.bytes(define_prefix);
+        try out.bytes(name);
+        try out.bytes("\n");
+    }
+    try out.bytes(cooked.prologue);
+    try out.bytes(cooked.body);
     try out.finish(total_size);
 }
 
-fn nextString(offset: *u32, text: []const u8) wire.Span {
-    const span: wire.Span = .{ .offset = offset.*, .len = @intCast(text.len) };
+fn defineLineLen(name: []const u8) usize {
+    return define_prefix.len + name.len + 1;
+}
+
+fn nextRef(offset: *u32, len: usize) wire.Span {
+    const span: wire.Span = .{ .offset = offset.*, .len = @intCast(len) };
     offset.* += span.len;
     return span;
 }
 
 const testing = std.testing;
 
-fn makeCooked(variants: []const []const u8, includes: []const []const u8, perms: []const CookedShader.Permutation) !CookedShader {
-    const permutations = try testing.allocator.alloc(CookedShader.Permutation, perms.len);
-    for (perms, permutations) |src, *dst| dst.* = .{ .key = src.key, .source = try testing.allocator.dupe(u8, src.source) };
+fn makeCooked(variants: []const []const u8, prologue: []const u8, body: []const u8) !CookedShader {
     return .{
         .stage = .vertex,
         .variant_names = try string_list.dupeStringList(testing.allocator, variants),
-        .includes = try string_list.dupeStringList(testing.allocator, includes),
-        .permutations = permutations,
+        .prologue = try testing.allocator.dupe(u8, prologue),
+        .body = try testing.allocator.dupe(u8, body),
     };
 }
 
+fn writeCooked(buf: []align(wire.section_alignment) u8, cooked: CookedShader) !wire.Bytes {
+    var writer = std.Io.Writer.fixed(buf);
+    try write(&writer, cooked);
+    return buf[0..writer.end];
+}
+
+fn expectSource(shader: *const ZShader, key: VariantKey, expected: []const u8) !void {
+    const source = try shader.sourceAlloc(testing.allocator, key);
+    defer testing.allocator.free(source);
+    try testing.expectEqualStrings(expected, source);
+}
+
 test "ZShader write and view round trips" {
-    var cooked = try makeCooked(&.{"SKINNED"}, &.{"common.glsl"}, &.{
-        .{ .key = .base, .source = "#version 330 core\n" },
-        .{ .key = .fromBits(1), .source = "#version 330 core\n#define SKINNED\n" },
-    });
+    var cooked = try makeCooked(&.{ "SKINNED", "HAS_AO" }, "#version 330 core\n", "\nvoid main(){}\n");
     defer cooked.deinit(testing.allocator);
 
     var buf: [1024]u8 align(wire.section_alignment) = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
-    try write(&writer, cooked);
-    const bytes: wire.Bytes = buf[0..writer.end];
+    const bytes = try writeCooked(&buf, cooked);
 
     try testing.expectEqualSlices(u8, MAGIC, bytes[0..4]);
     const shader = try ZShader.view(bytes);
     try testing.expectEqual(ShaderStage.vertex, shader.stage);
+    try testing.expectEqual(@as(usize, 2), shader.variantCount());
     try testing.expectEqualStrings("SKINNED", shader.variantName(0));
-    try testing.expectEqualStrings("common.glsl", shader.include(0));
-    try testing.expectEqual(@as(usize, 2), shader.permutations.len);
-    try testing.expectEqualStrings("#version 330 core\n", try shader.baseSource());
-    try testing.expectEqualStrings("#version 330 core\n#define SKINNED\n", try shader.sourceFor(.fromBits(1)));
-    try testing.expectEqual(VariantKey.fromBits(1), try shader.variantKey(&.{"SKINNED"}));
+    try testing.expectEqualStrings("HAS_AO", shader.variantName(1));
+    try expectSource(&shader, .base, "#version 330 core\n\nvoid main(){}\n");
+    try expectSource(&shader, .fromBits(1), "#version 330 core\n#define SKINNED\n\nvoid main(){}\n");
+    try expectSource(&shader, .fromBits(2), "#version 330 core\n#define HAS_AO\n\nvoid main(){}\n");
+    try expectSource(&shader, .fromBits(3), "#version 330 core\n#define SKINNED\n#define HAS_AO\n\nvoid main(){}\n");
+    try testing.expectEqual(VariantKey.fromBits(3), try shader.variantKey(&.{ "HAS_AO", "SKINNED" }));
     try testing.expectError(error.UnknownShaderVariant, shader.variantKey(&.{"MISSING"}));
+
+    var parts: ZShader.SourceParts = undefined;
+    try testing.expectError(error.InvalidVariantKey, shader.sourceParts(.fromBits(4), &parts));
 }
 
-test "ZShader.sourceFor reports missing permutations" {
-    var cooked = try makeCooked(&.{ "A", "B" }, &.{}, &.{
-        .{ .key = .base, .source = "base" },
-        .{ .key = .fromBits(2), .source = "b" },
-    });
+test "ZShader without a version line puts defines first" {
+    var cooked = try makeCooked(&.{"A"}, "", "void main(){}\n");
     defer cooked.deinit(testing.allocator);
 
     var buf: [512]u8 align(wire.section_alignment) = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
-    try write(&writer, cooked);
-
-    const shader = try ZShader.view(buf[0..writer.end]);
-    try testing.expectEqualStrings("b", try shader.sourceFor(.fromBits(2)));
-    try testing.expectError(error.ShaderPermutationNotFound, shader.sourceFor(.fromBits(1)));
+    const shader = try ZShader.view(try writeCooked(&buf, cooked));
+    try expectSource(&shader, .base, "void main(){}\n");
+    try expectSource(&shader, .fromBits(1), "#define A\nvoid main(){}\n");
 }
 
-test "ZShader round trips a stage with no permutations" {
-    var cooked = try makeCooked(&.{"SKINNED"}, &.{}, &.{});
+test "ZShader round trips a stage with no variants" {
+    var cooked = try makeCooked(&.{}, "#version 330 core\n", "");
     defer cooked.deinit(testing.allocator);
 
     var buf: [256]u8 align(wire.section_alignment) = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
-    try write(&writer, cooked);
-
-    const shader = try ZShader.view(buf[0..writer.end]);
-    try testing.expectEqualStrings("SKINNED", shader.variantName(0));
-    try testing.expectError(error.ShaderPermutationNotFound, shader.baseSource());
+    const shader = try ZShader.view(try writeCooked(&buf, cooked));
+    try testing.expectEqual(@as(usize, 0), shader.variantCount());
+    try expectSource(&shader, .base, "#version 330 core\n");
+    var parts: ZShader.SourceParts = undefined;
+    try testing.expectError(error.InvalidVariantKey, shader.sourceParts(.fromBits(1), &parts));
 }
 
-test "write rejects unsorted permutations" {
-    var cooked = try makeCooked(&.{"A"}, &.{}, &.{
-        .{ .key = .fromBits(1), .source = "a" },
-        .{ .key = .base, .source = "base" },
-    });
+test "ZShader supports the full 32-variant key space" {
+    var names: [max_variants][]const u8 = undefined;
+    var name_bufs: [max_variants][4]u8 = undefined;
+    for (&names, &name_bufs, 0..) |*name, *name_buf, i| name.* = try std.fmt.bufPrint(name_buf, "V{d}", .{i});
+    var cooked = try makeCooked(&names, "#version 330 core\n", "x\n");
     defer cooked.deinit(testing.allocator);
 
-    var buf: [512]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
-    try testing.expectError(error.UnsortedPermutations, write(&writer, cooked));
+    var buf: [2048]u8 align(wire.section_alignment) = undefined;
+    const shader = try ZShader.view(try writeCooked(&buf, cooked));
+    var parts: ZShader.SourceParts = undefined;
+    const all = try shader.sourceParts(.fromBits(std.math.maxInt(u32)), &parts);
+    try testing.expectEqual(@as(usize, max_variants + 2), all.len);
+    try testing.expectEqualStrings("#define V31\n", all[max_variants]);
+}
+
+test "write rejects invalid input" {
+    var buf: [512]u8 align(wire.section_alignment) = undefined;
+
+    var duplicate = try makeCooked(&.{ "A", "A" }, "", "");
+    defer duplicate.deinit(testing.allocator);
+    try testing.expectError(error.DuplicateVariant, writeCooked(&buf, duplicate));
+
+    var bad_name = try makeCooked(&.{"1A"}, "", "");
+    defer bad_name.deinit(testing.allocator);
+    try testing.expectError(error.InvalidVariantName, writeCooked(&buf, bad_name));
+
+    var bad_prologue = try makeCooked(&.{}, "#version 330\n#extension X : enable\n", "");
+    defer bad_prologue.deinit(testing.allocator);
+    try testing.expectError(error.InvalidPrologue, writeCooked(&buf, bad_prologue));
+
+    var continued_prologue = try makeCooked(&.{}, "#version 420 \\\n", "core\n");
+    defer continued_prologue.deinit(testing.allocator);
+    try testing.expectError(error.InvalidPrologue, writeCooked(&buf, continued_prologue));
 }
 
 test "ZShader.view rejects corrupted files" {
-    var cooked = try makeCooked(&.{"A"}, &.{}, &.{
-        .{ .key = .base, .source = "base" },
-        .{ .key = .fromBits(1), .source = "a" },
-    });
+    var cooked = try makeCooked(&.{ "A", "B" }, "#version 330 core\n", "void main(){}\n");
     defer cooked.deinit(testing.allocator);
 
     var buf: [512]u8 align(wire.section_alignment) = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
-    try write(&writer, cooked);
-    const len = writer.end;
+    const len = (try writeCooked(&buf, cooked)).len;
     const header: *Header = @ptrCast(&buf);
-    const entries: [*]PermutationEntry = @ptrCast(@alignCast(buf[header.permutations.offset..].ptr));
+    const defines: [*]wire.Span = @ptrCast(@alignCast(buf[header.variant_defines.offset..].ptr));
+    const strings = buf[header.strings.offset..][0..header.strings.len];
+    _ = try ZShader.view(buf[0..len]);
 
-    entries[1].key = 4; // bit outside the declared variant set
-    try testing.expectError(error.InvalidVariantKey, ZShader.view(buf[0..len]));
-    entries[1].key = 0;
-    try testing.expectError(error.UnsortedPermutations, ZShader.view(buf[0..len]));
-    entries[1].key = 1;
-    entries[1].source.len = 1000;
+    // Define line shape: prefix, identifier, and newline.
+    strings[1] = 'X';
+    try testing.expectError(error.InvalidVariantDefine, ZShader.view(buf[0..len]));
+    strings[1] = 'd';
+    strings[8] = '9';
+    try testing.expectError(error.InvalidVariantDefine, ZShader.view(buf[0..len]));
+    strings[8] = 'A';
+    strings[9] = ' ';
+    try testing.expectError(error.InvalidVariantDefine, ZShader.view(buf[0..len]));
+    strings[9] = '\n';
+
+    // Duplicate variant names.
+    strings[18] = 'A';
+    try testing.expectError(error.DuplicateVariant, ZShader.view(buf[0..len]));
+    strings[18] = 'B';
+
+    // String refs must be packed in write order and fill the blob.
+    defines[1].offset += 1;
     try testing.expectError(error.InvalidStringRef, ZShader.view(buf[0..len]));
-    entries[1].source.len = 1;
+    defines[1].offset -= 1;
+    header.body.len -= 1;
+    try testing.expectError(error.InvalidStringRef, ZShader.view(buf[0..len]));
+    header.body.len += 1;
+    header.body.len = 1000;
+    try testing.expectError(error.InvalidStringRef, ZShader.view(buf[0..len]));
+    header.body.len = @intCast(cooked.body.len);
+
+    // Prologue must be a single #version line.
+    const prologue_start = header.prologue.offset;
+    strings[prologue_start + 1] = 'x';
+    try testing.expectError(error.InvalidPrologue, ZShader.view(buf[0..len]));
+    strings[prologue_start + 1] = 'v';
+    strings[prologue_start + 8] = '\n';
+    try testing.expectError(error.InvalidPrologue, ZShader.view(buf[0..len]));
+    strings[prologue_start + 8] = ' ';
+
     header.stage = 99;
     try testing.expectError(error.InvalidEnumValue, ZShader.view(buf[0..len]));
     header.stage = 0;
-    const permutations = header.permutations;
-    header.permutations.offset = header.variant_names.offset;
+    header.variant_count = 33;
+    try testing.expectError(error.TooManyVariants, ZShader.view(buf[0..len]));
+    header.variant_count = 2;
+    const strings_span = header.strings;
+    header.strings.offset = header.variant_defines.offset;
     try testing.expectError(error.OverlappingSections, ZShader.view(buf[0..len]));
-    header.permutations = permutations;
+    header.strings = strings_span;
+
     _ = try ZShader.view(buf[0..len]);
     try testing.expectError(error.InvalidFileSize, ZShader.view(buf[0 .. len - 1]));
 }
