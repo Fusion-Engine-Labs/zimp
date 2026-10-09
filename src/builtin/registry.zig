@@ -1,6 +1,8 @@
 const std = @import("std");
 
 const AssetId = @import("../id/id_types.zig").AssetId;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
+const Extension = @import("../assets/asset.zig").Extension;
 
 pub const PREFIX = "fusion/";
 
@@ -51,11 +53,41 @@ pub fn idFor(file_path: []const u8) AssetId {
 
 pub const error_material_id = idFor(PREFIX ++ "error.zamat");
 
+/// `idFor` of each of `assets`, in order.
+pub const ids = blk: {
+    @setEvalBranchQuota(20_000);
+    var result: [assets.len]AssetId = undefined;
+    for (assets, &result) |asset, *id| id.* = idFor(asset.path);
+    break :blk result;
+};
+
+/// The kind of each of `assets`, in order.
+pub const kinds = blk: {
+    @setEvalBranchQuota(20_000);
+    var result: [assets.len]AssetKind = undefined;
+    for (assets, &result) |asset, *kind| kind.* = Extension.fromName(asset.path).assetKind().?;
+    break :blk result;
+};
+
+/// The kind of the builtin asset with this id, or null if it isn't one.
+pub fn kindOf(id: AssetId) ?AssetKind {
+    for (ids, kinds) |builtin_id, kind| {
+        if (builtin_id.eql(id)) return kind;
+    }
+    return null;
+}
+
 const testing = std.testing;
 const asset_registry = @import("../assets/asset_registry.zig");
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
-const AssetKind = @import("../assets/asset.zig").AssetKind;
 const path = @import("../path.zig");
+
+test "kindOf recognizes exactly the builtin ids" {
+    try testing.expectEqual(AssetKind.shader_stage, kindOf(idFor(PREFIX ++ "standard.vert")).?);
+    try testing.expectEqual(AssetKind.material, kindOf(error_material_id).?);
+    try testing.expect(kindOf(idFor(PREFIX ++ "missing.vert")) == null);
+    try testing.expect(kindOf(.zero) == null);
+}
 
 test "builtin.find" {
     try testing.expectEqual(assets[0].path, find(PREFIX ++ "standard.vert").?.path);

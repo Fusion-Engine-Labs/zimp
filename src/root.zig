@@ -14,6 +14,7 @@ pub const formats = struct {
     pub const ztex = @import("formats/ztex.zig");
     pub const zshdr = @import("formats/zshdr.zig");
     pub const zamat = @import("formats/zamat.zig");
+    pub const zpak = @import("formats/zpak.zig");
 };
 
 pub const WatchHandle = @import("watcher/handle.zig");
@@ -221,6 +222,8 @@ test {
     _ = @import("assets/cooked/material.zig");
     _ = @import("formats/zshdr.zig");
     _ = @import("formats/zamat.zig");
+    _ = @import("formats/zpak.zig");
+    _ = @import("shared/zstd.zig");
     _ = @import("assets/cooked/compression/compression.zig");
     _ = @import("assets/cooked/compression/bc1.zig");
     _ = @import("assets/cooked/compression/bc3.zig");
@@ -251,6 +254,7 @@ test {
     _ = @import("inspectors/zmesh.zig");
     _ = @import("inspectors/zshdr.zig");
     _ = @import("inspectors/zamat.zig");
+    _ = @import("inspectors/zpak.zig");
     _ = @import("inspectors/zcache.zig");
     _ = @import("inspectors/utils.zig");
     _ = @import("cache/cache.zig");

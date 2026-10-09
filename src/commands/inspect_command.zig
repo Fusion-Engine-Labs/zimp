@@ -4,7 +4,10 @@ const string_list = @import("../shared/string_list.zig");
 const log = @import("../logger.zig");
 const inspectors = @import("../inspectors/inspect.zig").inspector_registry;
 const file_read = @import("../shared/file_read.zig");
-const magic_len = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH.len;
+const FORMAT_MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC;
+const magic_len = FORMAT_MAGIC.ZMESH.len;
+const zpak_inspector = @import("../inspectors/zpak.zig");
+const PackStore = @import("../runtime.zig").PackStore;
 
 pub const InspectError = error{
     NotEnoughArguments,
@@ -42,6 +45,14 @@ pub const InspectCommand = struct {
     pub fn run(self: InspectCommand) !void {
         log.info("Running inspect command", .{});
 
+        var magic_buf: [magic_len]u8 = undefined;
+        const magic_read = try self.file.readPositionalAll(self.io, &magic_buf, 0);
+        if (magic_read == magic_len and std.mem.eql(u8, &magic_buf, FORMAT_MAGIC.ZPAK)) {
+            var store = try PackStore.mapFile(self.io, self.file);
+            defer store.close(self.io);
+            return zpak_inspector.inspect(self.allocator, self.io, &store);
+        }
+
         var buf: [8192]u8 = undefined;
         var file_reader = self.file.reader(self.io, &buf);
         const bytes = try file_read.readAllAligned(self.allocator, &file_reader.interface);
@@ -65,6 +76,7 @@ const testing = std.testing;
 const writeTestZmeshFile = @import("../formats/zmesh.zig").writeTestZmeshFile;
 const zshdr = @import("../formats/zshdr.zig");
 const CookedShader = @import("../assets/cooked/shader.zig").CookedShader;
+const pack_store = @import("../runtime/pack_store.zig");
 
 test "InspectCommand.parseFromArgs errors with NotEnoughArguments when no file provided" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect" };
@@ -147,6 +159,22 @@ test "InspectCommand.run succeeds for valid zshdr file" {
     const cmd: InspectCommand = .{
         .allocator = testing.allocator,
         .file = inspect_file,
+        .io = testing.io,
+    };
+    defer cmd.deinit();
+    try cmd.run();
+}
+
+test "InspectCommand.run inspects and verifies a pack" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var mesh_buf: [4096]u8 = undefined;
+    try pack_store.writeTestPack(tmp.dir, "a.zpak", &.{
+        .{ .id = pack_store.test_mesh_id, .kind = .mesh, .name = "m.zmesh", .bytes = try pack_store.testMeshBytes(&mesh_buf) },
+    });
+    const cmd: InspectCommand = .{
+        .allocator = testing.allocator,
+        .file = try tmp.dir.openFile(testing.io, "a.zpak", .{}),
         .io = testing.io,
     };
     defer cmd.deinit();

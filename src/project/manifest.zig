@@ -12,6 +12,7 @@ const DEFAULT_COOKED_ASSETS_DIR = ".fusion/cooked";
 const DEFAULT_ASSETS_DIR = "assets";
 const DEFAULT_SCENES_DIR = "scenes";
 const DEFAULT_ASSET_MANIFEST = ".fusion/assets.zmanifest";
+const DEFAULT_ASSET_PACK = ".fusion/assets.zpak";
 const DEFAULT_NAME = "Untitled Project";
 const DEFAULT_GENERATED_DIR = ".fusion";
 const DEFAULT_FORMAT = "fusion.proj";
@@ -40,6 +41,8 @@ pub const ProjectManifest = struct {
     generated_dir: []const u8 = DEFAULT_GENERATED_DIR,
     cooked_assets_dir: []const u8 = DEFAULT_COOKED_ASSETS_DIR,
     asset_manifest: []const u8 = DEFAULT_ASSET_MANIFEST,
+    /// Where `zimp pack --project` writes the pack and the runtime reads it.
+    asset_pack: []const u8 = DEFAULT_ASSET_PACK,
     default_scene: ?[]const u8 = null,
     /// Graphics profile to cook for. Null cooks for the host
     /// (`TargetProfile.host()`); `zimp cook --profile` overrides both.
@@ -95,6 +98,7 @@ pub const ProjectManifest = struct {
         try path.validateVirtual(self.generated_dir);
         try path.validateVirtual(self.cooked_assets_dir);
         try path.validateVirtual(self.asset_manifest);
+        try path.validateVirtual(self.asset_pack);
         if (self.default_scene) |scene| try path.validateVirtual(scene);
     }
 
@@ -108,6 +112,10 @@ pub const ProjectManifest = struct {
 
     pub fn assetManifestPath(self: *const ProjectManifest) []const u8 {
         return self.asset_manifest;
+    }
+
+    pub fn assetPackPath(self: *const ProjectManifest) []const u8 {
+        return self.asset_pack;
     }
 
     pub fn cloneOwned(self: *const ProjectManifest, allocator: std.mem.Allocator) !ProjectManifest {
@@ -125,6 +133,8 @@ pub const ProjectManifest = struct {
         errdefer allocator.free(cooked_assets_dir);
         const asset_manifest = try allocator.dupe(u8, self.asset_manifest);
         errdefer allocator.free(asset_manifest);
+        const asset_pack = try allocator.dupe(u8, self.asset_pack);
+        errdefer allocator.free(asset_pack);
         const default_scene = if (self.default_scene) |value| try allocator.dupe(u8, value) else null;
         errdefer if (default_scene) |value| allocator.free(value);
 
@@ -138,6 +148,7 @@ pub const ProjectManifest = struct {
             .generated_dir = generated_dir,
             .cooked_assets_dir = cooked_assets_dir,
             .asset_manifest = asset_manifest,
+            .asset_pack = asset_pack,
             .default_scene = default_scene,
             .target_profile = self.target_profile,
         };
@@ -151,6 +162,7 @@ pub const ProjectManifest = struct {
         allocator.free(self.generated_dir);
         allocator.free(self.cooked_assets_dir);
         allocator.free(self.asset_manifest);
+        allocator.free(self.asset_pack);
         if (self.default_scene) |value| allocator.free(value);
         self.* = undefined;
     }
@@ -203,6 +215,7 @@ test "ProjectManifest.save writes generated manifest file" {
     try testing.expectEqualStrings("assets", parsed.value.assets_dir);
     try testing.expectEqualStrings(".fusion/cooked", parsed.value.cooked_assets_dir);
     try testing.expectEqualStrings(".fusion/assets.zmanifest", parsed.value.asset_manifest);
+    try testing.expectEqualStrings(".fusion/assets.zpak", parsed.value.asset_pack);
     try testing.expectEqualStrings("fusion.proj", parsed.value.format);
     try testing.expect(parsed.value.project_id.eql(test_project_id));
 }
@@ -250,6 +263,14 @@ test "ProjectManifest.loadFromDir rejects invalid manifests" {
     try testing.expectError(error.InvalidProjectFormat, ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, "bad.proj"));
 }
 
+test "ProjectManifest defaults asset_pack when an older fusion.proj omits it" {
+    const parsed = try std.json.parseFromSlice(ProjectManifest, testing.allocator,
+        \\{ "project_id": "bf5a424f-e93e-4977-9a7a-0c522318dfdc" }
+    , .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings(".fusion/assets.zpak", parsed.value.asset_pack);
+}
+
 test "ProjectManifest parses project_id from canonical UUID text" {
     const bytes =
         \\{
@@ -288,6 +309,10 @@ test "ProjectManifest.validate rejects bad identity and paths" {
     m = valid;
     m.cooked_assets_dir = "../escape/cooked";
     try testing.expectError(error.ParentTraversalNotAllowed, m.validate());
+
+    m = valid;
+    m.asset_pack = "/abs/assets.zpak";
+    try testing.expectError(error.AbsolutePathNotAllowed, m.validate());
 }
 
 test "ProjectManifest cloneOwned owns all string fields" {
@@ -299,10 +324,12 @@ test "ProjectManifest cloneOwned owns all string fields" {
         .generated_dir = ".cache",
         .cooked_assets_dir = ".cache/cooked",
         .asset_manifest = ".cache/assets.zmanifest",
+        .asset_pack = "build/game.zpak",
         .default_scene = "game-scenes/main.scene",
     };
     var owned = try source.cloneOwned(testing.allocator);
     defer owned.deinit(testing.allocator);
+    try testing.expectEqualStrings("build/game.zpak", owned.assetPackPath());
 
     try testing.expectEqualStrings("fusion.proj", owned.format);
     try testing.expectEqualStrings("game-scenes/main.scene", owned.default_scene.?);

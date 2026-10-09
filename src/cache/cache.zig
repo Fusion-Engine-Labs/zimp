@@ -300,25 +300,7 @@ pub const Cache = struct {
         cache_dir: std.Io.Dir,
         cache_path: []const u8,
     ) !Cache {
-        const file = try cache_dir.openFile(io, cache_path, .{});
-        defer file.close(io);
-
-        var buf: [8192]u8 = undefined;
-        var file_reader = file.reader(io, &buf);
-        var reader = &file_reader.interface;
-
-        var magic: [MAGIC.len]u8 = undefined;
-        try reader.readSliceAll(&magic);
-        if (!std.mem.eql(u8, &magic, MAGIC)) {
-            return error.InvalidMagic;
-        }
-
-        const version = try reader.takeInt(u16, .little);
-        if (version != VERSION) {
-            return error.StaleVersion;
-        }
-
-        var cache = try readEntries(allocator, reader);
+        var cache = try readFile(allocator, io, cache_dir, cache_path);
         cache.source_dir = source_dir;
 
         if (!std.mem.eql(u8, cache.output_dir_path, output_dir_path)) {
@@ -334,6 +316,24 @@ pub const Cache = struct {
         }
 
         return cache;
+    }
+
+    /// Reads a cache file on its own, not tied to a source or output
+    /// directory. For tools that only need its entries (`zimp pack --source`).
+    pub fn readFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, cache_path: []const u8) !Cache {
+        const file = try dir.openFile(io, cache_path, .{});
+        defer file.close(io);
+
+        var buf: [8192]u8 = undefined;
+        var file_reader = file.reader(io, &buf);
+        var reader = &file_reader.interface;
+
+        var magic: [MAGIC.len]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
+        return read(allocator, reader);
     }
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Cache {

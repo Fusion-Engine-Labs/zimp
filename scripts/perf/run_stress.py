@@ -541,7 +541,7 @@ def print_results(scenarios: dict[str, dict[str, Any]]) -> None:
                 f"{metric_median(scenario, 'changed_cooked_files'):.0f}",
             )
             for name, scenario in scenarios.items()
-            if name != "load"
+            if name not in ("load", "pack")
         ],
     )
     by_kind = scenarios["cold"]["aggregate"].get("cooked_by_kind")
@@ -551,23 +551,38 @@ def print_results(scenarios: dict[str, dict[str, Any]]) -> None:
             ("Kind", "Files", "Bytes"),
             [(kind, f"{stats['files']['median']:.0f}", format_bytes(stats["bytes"]["median"])) for kind, stats in by_kind.items()],
         )
+    pack = scenarios.get("pack")
+    if pack:
+        print("\nPACK (zimp pack --source over the cold output)")
+        print_table(
+            ("Variant", "Wall median", "Bytes"),
+            [(name, format_duration(stats["wall_ns"]["median"]), format_bytes(stats["bytes"]["median"])) for name, stats in pack["aggregate"].items()],
+        )
     load = scenarios.get("load")
     if load:
-        print("\nLOAD (runtime.loadFromFile over the cold output, warm page cache)")
-        print_table(
-            ("Kind", "Files", "Bytes", "Pass median", "Per file", "Throughput"),
-            [
-                (
-                    kind,
-                    f"{stats['files']['median']:.0f}",
-                    format_bytes(stats["bytes"]["median"]),
-                    format_duration(stats["median_pass_ns"]["median"]),
-                    format_duration(stats["us_per_file"]["median"] * 1000),
-                    f"{stats['gb_per_s']['median']:.2f} GB/s",
-                )
-                for kind, stats in load["aggregate"].items()
-            ],
-        )
+        for source, kinds in load["aggregate"].items():
+            if source == "loose":
+                print("\nLOAD loose (runtime.loadFromFile over the cold output, warm page cache)")
+            else:
+                print(f"\nLOAD {source} (runtime.PackStore.load, fresh mapping per pass, warm page cache)")
+                if "open" in kinds:
+                    print(f"  open (mmap + TOC validation): {format_duration(kinds['open']['median_pass_ns']['median'])}")
+            print_table(
+                ("Kind", "Files", "Bytes", "Stored", "Pass median", "Per file", "Throughput"),
+                [
+                    (
+                        kind,
+                        f"{stats['files']['median']:.0f}",
+                        format_bytes(stats["bytes"]["median"]),
+                        format_bytes(stats["stored_bytes"]["median"]),
+                        format_duration(stats["median_pass_ns"]["median"]),
+                        format_duration(stats["us_per_file"]["median"] * 1000),
+                        f"{stats['gb_per_s']['median']:.2f} GB/s",
+                    )
+                    for kind, stats in kinds.items()
+                    if kind != "open"
+                ],
+            )
     cold_total = metric_median(scenarios["cold"], "wall_ns")
     warm_total = metric_median(scenarios["warm_noop"], "wall_ns")
     invalidated_total = metric_median(scenarios["one_file_invalidation"], "wall_ns")
@@ -630,9 +645,33 @@ def add_output_snapshot(result: dict[str, Any], before: dict[str, tuple[int, int
     return result
 
 
-def run_load_bench(load_bench: Path, output: Path) -> dict[str, Any]:
-    """Load every cooked asset through zimp's runtime loader; see load_bench.zig."""
-    process = subprocess.run([str(load_bench), str(output)], text=True, capture_output=True, check=False)
+PACK_VARIANTS = {"pack-zstd": [], "pack-raw": ["--no-compress"]}
+
+
+def run_packs(zimp: Path, output: Path, pack_dir: Path) -> dict[str, Any] | None:
+    """Pack the cold-cook output with and without compression; see `zimp pack`.
+
+    Returns None when this zimp has no pack command, so older revisions still run.
+    """
+    result: dict[str, Any] = {}
+    for name, flags in PACK_VARIANTS.items():
+        pack_path = pack_dir / f"{name}.zpak"
+        start_ns = time.perf_counter_ns()
+        process = subprocess.run(
+            [str(zimp), "pack", "--source", str(output), "--output", str(pack_path), *flags],
+            text=True, capture_output=True, check=False,
+        )
+        wall_ns = time.perf_counter_ns() - start_ns
+        if process.returncode != 0:
+            print(f"zimp pack failed; skipping pack measurements:\n{process.stdout}{process.stderr}", file=sys.stderr)
+            return None
+        result[name] = {"wall_ns": wall_ns, "bytes": pack_path.stat().st_size}
+    return result
+
+
+def run_load_bench(load_bench: Path, output: Path, packs: list[Path]) -> dict[str, Any]:
+    """Load every cooked asset from loose files and from each pack; see load_bench.zig."""
+    process = subprocess.run([str(load_bench), str(output), *map(str, packs)], text=True, capture_output=True, check=False)
     if process.returncode != 0:
         print(process.stdout + "\n" + process.stderr, file=sys.stderr)
         raise RuntimeError(f"load bench returned {process.returncode}")
@@ -640,11 +679,12 @@ def run_load_bench(load_bench: Path, output: Path) -> dict[str, Any]:
     for line in process.stdout.splitlines():
         row = json.loads(line)
         median_ns = row["median_pass_ns"]
-        result[row["kind"]] = {
+        result.setdefault(row.get("source", "loose"), {})[row["kind"]] = {
             "files": row["files"],
             "bytes": row["bytes"],
+            "stored_bytes": row.get("stored_bytes", row["bytes"]),
             "median_pass_ns": median_ns,
-            "us_per_file": median_ns / 1000 / row["files"],
+            "us_per_file": median_ns / 1000 / max(row["files"], 1),
             "gb_per_s": row["bytes"] / median_ns if median_ns else 0.0,
         }
     return result
@@ -722,8 +762,12 @@ def main() -> int:
         sample_root = work_dir / "samples" / f"sample-{index:03d}"
         source, output = prepare_sample(sample_root, fixture_source)
         samples_by_scenario["cold"].append(run_scenario("cold", source, output, zimp))
+        packs = run_packs(zimp, output, sample_root)
+        if packs is not None:
+            samples_by_scenario.setdefault("pack", []).append(packs)
         if load_bench is not None:
-            samples_by_scenario.setdefault("load", []).append(run_load_bench(load_bench, output))
+            pack_paths = [sample_root / f"{name}.zpak" for name in PACK_VARIANTS] if packs is not None else []
+            samples_by_scenario.setdefault("load", []).append(run_load_bench(load_bench, output, pack_paths))
         samples_by_scenario["warm_noop"].append(run_scenario("warm_noop", source, output, zimp))
         samples_by_scenario["one_file_invalidation"].append(
             run_scenario("one_file_invalidation", source, output, zimp)
@@ -733,6 +777,7 @@ def main() -> int:
     for name, samples in samples_by_scenario.items():
         scenarios[name] = {"samples": samples, "aggregate": aggregate_scenario(samples)}
     load_scenario = scenarios.pop("load", None)
+    pack_scenario = scenarios.pop("pack", None)
 
     for sample in scenarios["warm_noop"]["samples"]:
         if sample["changed_cooked_files"] != 0:
@@ -741,6 +786,8 @@ def main() -> int:
         if sample["changed_cooked_files"] == 0:
             raise RuntimeError("one-file invalidation sample did not recook affected assets")
 
+    if pack_scenario is not None:
+        scenarios["pack"] = pack_scenario
     if load_scenario is not None:
         scenarios["load"] = load_scenario
     print_results(scenarios)
