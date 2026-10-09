@@ -8,6 +8,7 @@ const file_read = @import("../shared/file_read.zig");
 const builtin = @import("../builtin/registry.zig");
 const CookInput = @import("cooker.zig").CookInput;
 const zamat = @import("../formats/zamat.zig");
+const wire = @import("../shared/wire.zig");
 const Cooker = @import("cooker.zig").Cooker;
 const log = @import("../logger.zig");
 
@@ -64,7 +65,52 @@ fn validateReferences(
         try validateParam(file_path, param, &reflected);
     }
 
+    try checkUniformNameHashes(allocator, file_path, source, &reflected);
+    try checkNameHashes(file_path, reflected.variants, wire.nameHash);
+
     source.required_variants = try selectRequiredVariants(allocator, source, reflected.variants);
+}
+
+/// Cooked materials keep only `wire.nameHash`es and the runtime finds uniforms
+/// by hash, so no two names the shaders can see may share one. That includes
+/// the names the runtime derives from texture slots without declaring them.
+fn checkUniformNameHashes(
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+    source: *const raw_material.MaterialSource,
+    reflected: *const ReflectedShaders,
+) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var names: std.ArrayList([]const u8) = .empty;
+    for (reflected.uniforms) |uniform| try names.append(arena, uniform.name);
+    for (source.textures) |slot| {
+        try names.append(arena, try std.fmt.allocPrint(arena, "{s}_uv_set", .{slot.slot_name}));
+        try names.append(arena, try std.fmt.allocPrint(arena, "{s}_uv_transform", .{slot.slot_name}));
+    }
+    try names.appendSlice(arena, &runtime_uniform_names);
+    try checkNameHashes(file_path, names.items, wire.nameHash);
+}
+
+/// Uniforms fusion-runtime looks up by name on every material pipeline
+/// (`graphics/renderer.zig` and `graphics/material.zig`). A shader need not
+/// declare them, so they are checked even when absent.
+const runtime_uniform_names = [_][]const u8{
+    "u_model",      "u_normal_matrix", "u_uv0_min",            "u_uv0_scale",
+    "u_pos_min",    "u_pos_scale",     "u_view",               "u_projection",
+    "u_camera_pos", "u_normal_scale",  "u_occlusion_strength", "u_alpha_cutoff",
+};
+
+fn checkNameHashes(file_path: []const u8, names: []const []const u8, comptime hash: fn ([]const u8) u64) !void {
+    for (names, 0..) |name, i| {
+        for (names[0..i]) |other| {
+            if (hash(name) != hash(other) or std.mem.eql(u8, name, other)) continue;
+            log.err("{s}: shader names '{s}' and '{s}' have the same hash", .{ file_path, other, name });
+            return error.NameHashCollision;
+        }
+    }
 }
 
 /// Shader source may either be embedded engine data or a heap allocation read
@@ -531,7 +577,18 @@ test "material cooker selects declared variants from material contents" {
 
     const loaded = try zamat.Zamat.view(out[0..writer.end]);
 
-    try testing.expectEqual(@as(usize, 2), loaded.requiredVariantCount());
-    try testing.expectEqualStrings("HAS_NORMAL_MAP", loaded.requiredVariant(0));
-    try testing.expectEqualStrings("ALPHA_TEST", loaded.requiredVariant(1));
+    var expected = [_]u64{ wire.nameHash("HAS_NORMAL_MAP"), wire.nameHash("ALPHA_TEST") };
+    std.mem.sort(u64, &expected, {}, std.sort.asc(u64));
+    try testing.expectEqualSlices(u64, &expected, loaded.variant_hashes);
+}
+
+test "checkNameHashes rejects distinct names with equal hashes" {
+    const byLength = struct {
+        fn hash(name: []const u8) u64 {
+            return name.len;
+        }
+    }.hash;
+    try checkNameHashes("m.zamat", &.{ "u_a", "u_bb", "u_a" }, byLength);
+    try testing.expectError(error.NameHashCollision, checkNameHashes("m.zamat", &.{ "u_a", "u_bb", "u_c" }, byLength));
+    try checkNameHashes("m.zamat", &.{ "u_a", "u_b" }, wire.nameHash);
 }

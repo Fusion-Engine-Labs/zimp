@@ -221,6 +221,25 @@ pub fn enumFromInt(comptime E: type, raw: anytype) !E {
     return std.enums.fromInt(E, raw) orelse error.InvalidEnumValue;
 }
 
+/// On-disk identity of a shader-facing name (uniform, sampler, or variant):
+/// 64-bit FNV-1a. Cooked files store these instead of the names, and the
+/// runtime keys its uniform tables with the same function.
+pub fn nameHash(name: []const u8) u64 {
+    return nameHashAppend(0xcbf29ce484222325, name);
+}
+
+/// Continues `hash` with `suffix`. FNV-1a has no finalization step, so
+/// `nameHashAppend(nameHash(a), b) == nameHash(a ++ b)`: derived names such as
+/// `<sampler>_uv_set` can be hashed without the original name.
+pub fn nameHashAppend(hash: u64, suffix: []const u8) u64 {
+    var h = hash;
+    for (suffix) |byte| {
+        h ^= byte;
+        h *%= 0x00000100000001B3;
+    }
+    return h;
+}
+
 // Streaming helpers for build-time files (the cook cache) that are not viewed in place.
 
 pub fn checkedAddWithinLimit(total: *usize, amount: usize, limit: usize) !void {
@@ -319,6 +338,13 @@ test "writeString and readString round-trip" {
     const value = try readString(std.testing.allocator, &reader);
     defer std.testing.allocator.free(value);
     try std.testing.expectEqualStrings("cooked/mesh.zmesh", value);
+}
+
+test "nameHash is FNV-1a and continues across appends" {
+    try std.testing.expectEqual(@as(u64, 0xcbf29ce484222325), nameHash(""));
+    try std.testing.expectEqual(@as(u64, 0xaf63dc4c8601ec8c), nameHash("a"));
+    try std.testing.expectEqual(nameHash("u_albedo_uv_set"), nameHashAppend(nameHash("u_albedo"), "_uv_set"));
+    try std.testing.expect(nameHash("u_albedo") != nameHash("u_albedo_uv_set"));
 }
 
 test "enumFromInt rejects invalid exhaustive enum values" {
