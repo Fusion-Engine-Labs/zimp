@@ -3,6 +3,7 @@ const string_list = @import("../shared/string_list.zig");
 
 const constants = @import("../shared/constants.zig");
 const cooked_shader = @import("../assets/cooked/shader.zig");
+const glsl_minify = @import("../assets/cooked/glsl_minify.zig");
 const raw_shader = @import("../assets/raw/shader.zig");
 const wire = @import("../shared/wire.zig");
 
@@ -21,7 +22,8 @@ const define_prefix = "#define ";
 /// holding the define lines, the prologue, and the body, in that order.
 ///
 /// A variant's source is `prologue ++ defines for set bits ++ body`. The
-/// prologue runs through the `#version` line (after any blank lines), or is
+/// prologue runs through the `#version` line (after any blank or comment-only
+/// lines), or is
 /// empty when the shader does not start with one.
 pub const Header = extern struct {
     file: wire.FileHeader,
@@ -162,14 +164,10 @@ fn defineName(line: []const u8) ?[]const u8 {
     return if (raw_shader.isValidVariantName(name)) name else null;
 }
 
-/// Empty, or blank lines followed by one `#version` line including its newline.
+/// Empty, or blank/comment-only lines followed by one `#version` line
+/// including its newline (see `glsl_minify.versionPrologueEnd`).
 pub fn isValidPrologue(prologue: []const u8) bool {
-    if (prologue.len == 0) return true;
-    const start = std.mem.indexOfNone(u8, prologue, "\n") orelse return false;
-    const newline = std.mem.indexOfScalarPos(u8, prologue, start, '\n') orelse return false;
-    const line = prologue[start..newline];
-    if (std.mem.endsWith(u8, std.mem.trimEnd(u8, line, "\r"), "\\")) return false;
-    return newline == prologue.len - 1 and raw_shader.isVersionLine(line);
+    return prologue.len == 0 or glsl_minify.versionPrologueEnd(prologue) == prologue.len;
 }
 
 pub fn view(bytes: wire.Bytes) !ZShader {
@@ -339,6 +337,10 @@ test "write rejects invalid input" {
     var continued_prologue = try makeCooked(&.{}, "#version 420 \\\n", "core\n");
     defer continued_prologue.deinit(testing.allocator);
     try testing.expectError(error.InvalidPrologue, writeCooked(&buf, continued_prologue));
+
+    var commented_prologue = try makeCooked(&.{}, "// header\r\n  \n#version 330 core\r\n", "x\n");
+    defer commented_prologue.deinit(testing.allocator);
+    _ = try ZShader.view(try writeCooked(&buf, commented_prologue));
 }
 
 test "ZShader.view rejects corrupted files" {

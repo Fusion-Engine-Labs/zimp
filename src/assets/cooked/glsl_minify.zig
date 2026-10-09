@@ -39,45 +39,106 @@ pub fn minify(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
 
 fn hasLineContinuation(source: []const u8) bool {
     var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        if (std.mem.endsWith(u8, std.mem.trimEnd(u8, line, "\r"), "\\")) return true;
-    }
+    while (lines.next()) |line| if (endsWithContinuation(line)) return true;
     return false;
 }
 
-/// Copies `line` into `code` without comments. A block comment becomes one
-/// space, as in the C preprocessor. Quoted strings (only legal in directives,
-/// e.g. `#line 1 "a.glsl"`) are copied verbatim.
-fn stripComments(allocator: std.mem.Allocator, code: *std.ArrayList(u8), line: []const u8, in_block_comment: *bool) !void {
-    var in_string = false;
-    var i: usize = 0;
-    while (i < line.len) {
-        if (in_block_comment.*) {
-            const end = std.mem.indexOfPos(u8, line, i, "*/") orelse return;
-            in_block_comment.* = false;
-            i = end + 2;
-            continue;
+/// Iterates the characters of one line that are outside comments. A block
+/// comment yields one space, as in the C preprocessor. Quoted strings (only
+/// legal in directives, e.g. `#line 1 "a.glsl"`) are passed through verbatim.
+const LineCode = struct {
+    line: []const u8,
+    in_block_comment: *bool,
+    i: usize = 0,
+    in_string: bool = false,
+
+    fn next(self: *LineCode) ?u8 {
+        while (self.i < self.line.len) {
+            if (self.in_block_comment.*) {
+                const end = std.mem.indexOfPos(u8, self.line, self.i, "*/") orelse {
+                    self.i = self.line.len;
+                    return null;
+                };
+                self.in_block_comment.* = false;
+                self.i = end + 2;
+                continue;
+            }
+            const c = self.line[self.i];
+            if (self.in_string) {
+                if (c == '"') self.in_string = false;
+            } else if (c == '"') {
+                self.in_string = true;
+            } else if (c == '/' and self.i + 1 < self.line.len and self.line[self.i + 1] == '/') {
+                self.i = self.line.len;
+                return null;
+            } else if (c == '/' and self.i + 1 < self.line.len and self.line[self.i + 1] == '*') {
+                self.in_block_comment.* = true;
+                self.i += 2;
+                return ' ';
+            }
+            self.i += 1;
+            return c;
         }
-        const c = line[i];
-        if (in_string) {
-            try code.append(allocator, c);
-            if (c == '"') in_string = false;
-            i += 1;
-            continue;
-        }
-        if (c == '"') {
-            in_string = true;
-        } else if (c == '/' and i + 1 < line.len and line[i + 1] == '/') {
-            return;
-        } else if (c == '/' and i + 1 < line.len and line[i + 1] == '*') {
-            in_block_comment.* = true;
-            try code.append(allocator, ' ');
-            i += 2;
-            continue;
-        }
-        try code.append(allocator, c);
-        i += 1;
+        return null;
     }
+
+    /// Next character that is not whitespace, or null at the end of the line.
+    fn nextNonSpace(self: *LineCode) ?u8 {
+        while (self.next()) |c| if (!isSpace(c)) return c;
+        return null;
+    }
+
+    fn drain(self: *LineCode) void {
+        while (self.next()) |_| {}
+    }
+};
+
+fn stripComments(allocator: std.mem.Allocator, code: *std.ArrayList(u8), line: []const u8, in_block_comment: *bool) !void {
+    var it: LineCode = .{ .line = line, .in_block_comment = in_block_comment };
+    while (it.next()) |c| try code.append(allocator, c);
+}
+
+/// Length of the prologue that variant defines must follow: any blank or
+/// comment-only lines, then the `#version` line including its newline. Returns
+/// 0 when the first code line is not `#version` (defines then go first), and
+/// null when the version line cannot end a prologue because it is continued,
+/// leaves a block comment open, or has no newline. Works on minified and
+/// unminified source alike.
+pub fn versionPrologueEnd(source: []const u8) ?usize {
+    var in_block_comment = false;
+    var start: usize = 0;
+    while (start < source.len) {
+        const newline = std.mem.indexOfScalarPos(u8, source, start, '\n');
+        const line = source[start .. newline orelse source.len];
+        var it: LineCode = .{ .line = line, .in_block_comment = &in_block_comment };
+        const first = it.nextNonSpace() orelse {
+            // A continued blank or comment line may splice onto `#version`.
+            if (endsWithContinuation(line)) return null;
+            start = (newline orelse return 0) + 1;
+            continue;
+        };
+        if (first != '#' or !matchesVersion(&it)) return 0;
+        it.drain();
+        if (in_block_comment or endsWithContinuation(line)) return null;
+        return (newline orelse return null) + 1;
+    }
+    return 0;
+}
+
+/// Matches `version` followed by whitespace or the end of the line, after a
+/// `#` (GLSL allows whitespace between `#` and the directive name).
+fn matchesVersion(it: *LineCode) bool {
+    var c = it.nextNonSpace() orelse return false;
+    for ("version", 0..) |expected, i| {
+        if (i > 0) c = it.next() orelse return false;
+        if (c != expected) return false;
+    }
+    const after = it.next() orelse return true;
+    return isSpace(after);
+}
+
+fn endsWithContinuation(line: []const u8) bool {
+    return std.mem.endsWith(u8, std.mem.trimEnd(u8, line, "\r"), "\\");
 }
 
 fn appendNormalized(allocator: std.mem.Allocator, out: *std.ArrayList(u8), code: []const u8) !void {
@@ -173,4 +234,29 @@ test "minify shrinks the builtin standard shader without losing lines" {
     try testing.expect(out.len < source.len);
     try testing.expectEqual(std.mem.count(u8, source, "\n"), std.mem.count(u8, out, "\n"));
     try testing.expect(std.mem.indexOf(u8, out, "//") == null);
+}
+
+test "versionPrologueEnd skips blank and comment-only lines" {
+    const cases = [_]struct { source: []const u8, end: ?usize }{
+        .{ .source = "#version 330 core\nvoid main(){}\n", .end = 18 },
+        .{ .source = "\n\n#version 330 core\nx\n", .end = 20 },
+        .{ .source = "// header\n   \n#version 330 core\nx\n", .end = 32 },
+        .{ .source = "\r\n#version 330 core\r\nx\n", .end = 21 },
+        .{ .source = "/* license\n  text */\n#version 330 core\nx\n", .end = 39 },
+        .{ .source = "/* a */ #version 330 core\nx\n", .end = 26 },
+        .{ .source = "#  version 330\nx\n", .end = 15 },
+        .{ .source = "#version 330 // note\nx\n", .end = 21 },
+        // No leading #version: defines go first.
+        .{ .source = "", .end = 0 },
+        .{ .source = "void main(){}\n", .end = 0 },
+        .{ .source = "#define A\n#version 330\n", .end = 0 },
+        .{ .source = "#versionx 330\n", .end = 0 },
+        .{ .source = "/* #version 330 */\nx\n", .end = 0 },
+        // A version line that cannot end a prologue.
+        .{ .source = "#version 420 \\\ncore\n", .end = null },
+        .{ .source = "#version 330 /* open\n */\n", .end = null },
+        .{ .source = "// hdr \\\n#version 330\n", .end = null },
+        .{ .source = "#version 330", .end = null },
+    };
+    for (cases) |case| try testing.expectEqual(case.end, versionPrologueEnd(case.source));
 }

@@ -337,14 +337,6 @@ pub fn freeVariantNames(allocator: std.mem.Allocator, variants: []const []const 
     allocator.free(variants);
 }
 
-pub fn isVersionLine(line: []const u8) bool {
-    const trimmed = std.mem.trim(u8, line, " \t\r");
-    if (!std.mem.startsWith(u8, trimmed, "#version")) return false;
-    if (trimmed.len == "#version".len) return true;
-    const next = trimmed["#version".len];
-    return next == ' ' or next == '\t';
-}
-
 pub fn isValidVariantName(name: []const u8) bool {
     if (name.len == 0) return false;
     if (!isIdentStart(name[0])) return false;

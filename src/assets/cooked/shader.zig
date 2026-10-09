@@ -24,12 +24,11 @@ pub const CookedShader = struct {
         const minified = try glsl_minify.minify(allocator, raw.source);
         defer allocator.free(minified);
 
-        const split = versionLineEnd(minified);
+        // Minify leaves sources with line continuations untouched, so the
+        // split has to understand comments and blank lines, not just `\n`.
+        const split = glsl_minify.versionPrologueEnd(minified) orelse return error.UnsupportedVersionDirective;
         const prologue = try allocator.dupe(u8, minified[0..split]);
         errdefer allocator.free(prologue);
-        if (prologue.len > 0 and std.mem.endsWith(u8, std.mem.trimEnd(u8, prologue, "\r\n"), "\\")) {
-            return error.ContinuedVersionDirective;
-        }
 
         // Each glShaderSource string restarts line numbering and bumps the
         // source string number, so restore both for the body: errors then point
@@ -51,15 +50,6 @@ pub const CookedShader = struct {
         allocator.free(self.body);
     }
 };
-
-/// End of the `#version` line (after its newline) when only blank lines
-/// precede it, else 0. Defines must follow `#version`, and otherwise go first.
-/// Minified source has no comments, so blank lines are exactly `\n`.
-fn versionLineEnd(source: []const u8) usize {
-    const start = std.mem.indexOfNone(u8, source, "\n") orelse return 0;
-    const newline = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse return 0;
-    return if (raw_shader.isVersionLine(source[start..newline])) newline + 1 else 0;
-}
 
 const testing = std.testing;
 
@@ -114,13 +104,40 @@ test "CookedShader cook leaves the prologue empty without a version line" {
     try testing.expectEqualStrings("#line 1 0\n\nvoid main(){}\n", cooked.body);
 }
 
-test "CookedShader cook rejects a continued version directive" {
-    const raw = RawShader{
-        .path = "basic.vert",
-        .stage = .vertex,
-        .source = "#version 420 \\\ncore\nvoid main() {}\n",
-        .variants = &.{},
-        .includes = &.{},
+test "CookedShader cook finds the version line in unminified continuation sources" {
+    const sources = [_][]const u8{
+        "// header\n#version 330 core\n#define X a \\\n b\nvoid main() {}\n",
+        "   \n#version 330 core\n#define X a \\\n b\nvoid main() {}\n",
+        "\r\n#version 330 core\r\n#define X a \\\r\n b\r\nvoid main() {}\r\n",
+        "/* license */\n#version 330 core\n#define X a \\\n b\nvoid main() {}\n",
     };
-    try testing.expectError(error.ContinuedVersionDirective, CookedShader.cook(testing.allocator, &raw));
+    for (sources) |source| {
+        const raw = RawShader{ .path = "a.vert", .stage = .vertex, .source = source, .variants = &.{}, .includes = &.{} };
+        var cooked = try CookedShader.cook(testing.allocator, &raw);
+        defer cooked.deinit(testing.allocator);
+
+        const version = std.mem.indexOf(u8, source, "#version").?;
+        const split = std.mem.indexOfScalarPos(u8, source, version, '\n').? + 1;
+        try testing.expectEqualStrings(source[0..split], cooked.prologue);
+        try testing.expect(std.mem.startsWith(u8, cooked.body, "#line 3 0\n#define X a \\"));
+    }
+}
+
+test "CookedShader cook minifies away a comment opened on the version line" {
+    const raw = RawShader{ .path = "a.vert", .stage = .vertex, .source = "#version 330 /* open\n */\nvoid main() {}\n", .variants = &.{}, .includes = &.{} };
+    var cooked = try CookedShader.cook(testing.allocator, &raw);
+    defer cooked.deinit(testing.allocator);
+    try testing.expectEqualStrings("#version 330\n", cooked.prologue);
+}
+
+test "CookedShader cook rejects version lines it cannot split after" {
+    const sources = [_][]const u8{
+        "#version 420 \\\ncore\nvoid main() {}\n",
+        // Unminified (it has a continuation), so the comment is still open.
+        "#version 330 /* open\n */\n#define X a \\\n b\nvoid main() {}\n",
+    };
+    for (sources) |source| {
+        const raw = RawShader{ .path = "a.vert", .stage = .vertex, .source = source, .variants = &.{}, .includes = &.{} };
+        try testing.expectError(error.UnsupportedVersionDirective, CookedShader.cook(testing.allocator, &raw));
+    }
 }
