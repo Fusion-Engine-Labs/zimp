@@ -16,8 +16,9 @@ Designed for the [Fusion Game Engine](https://github.com/Fusion-Engine) but full
 - **Shader preprocessing** — `#include` resolution and variant expansion; cooked shaders store final GLSL source per stage.
 - **glTF material extraction** — materials and embedded images inside `.glb`/`.gltf` are auto-generated as sources under `generated/` (with deterministic derived ids) and cooked in the same run.
 - **Incremental builds** — content-hashed `.zcache` with dependency graph tracking. Only re-cooks what changed.
+- **Pack archive** — `zimp pack` puts every cooked asset of a project into one `.zpak`: memory-mapped at runtime, looked up by `AssetId` with no parsing, raw entries viewed in place with zero copies, and chunked zstd where it pays.
 - **Dual interface** — plugs into `build.zig` as a build step (`addProjectCookStep`) or runs as a standalone CLI.
-- **Zero runtime dependencies** — cooked formats are self-contained binary blobs. No third-party parsers at runtime.
+- **Zero runtime dependencies** — cooked formats are self-contained binary blobs. No third-party parsers at runtime; packs decode with the vendored zstd (`external/zstd`).
 
 ## Compiler Overview
 
@@ -49,6 +50,14 @@ Designed for the [Fusion Game Engine](https://github.com/Fusion-Engine) but full
                                  │
                                  ▼
                         assets.zmanifest
+                                 │
+                                 ▼
+                          ┌────────────┐
+                          │    Pack    │ zimp pack: one mmappable archive for shipping
+                          └──────┬─────┘
+                                 │
+                                 ▼
+                           assets.zpak
 ```
 
 ## Requirements
@@ -113,6 +122,25 @@ zimp cook --project . --profile desktop
 zimp cook --source assets/ --output cooked/ --metrics-json
 ```
 
+### Pack a project for shipping
+
+Packs every asset in the project's `assets.zmanifest` into the manifest's `asset_pack` (default `.fusion/assets.zpak`). Each asset is validated, every reference it holds must resolve inside the pack, and the file is replaced atomically:
+
+```sh
+zimp pack --project path/to/project
+
+# Write somewhere else, or trade size for compression time
+zimp pack --project . --output build/game.zpak --level 9
+
+# Store every asset raw (zero-copy loads, bigger file)
+zimp pack --project . --no-compress
+
+# Pack a directory-mode cook (lists its assets from the cook's .zcache)
+zimp pack --source cooked/ --output cooked.zpak
+```
+
+An asset is stored zstd-compressed (level 19 by default, in independent 256 KiB frames) only when that saves at least 10% and at least 4 KiB; everything else is stored raw. Smaller savings barely change the IO, but every load would pay to decode.
+
 ### Inspect cooked assets
 
 ```sh
@@ -121,6 +149,7 @@ zimp inspect cooked/basic.vert.zshdr
 zimp inspect cooked/monkey.zamat
 zimp inspect cooked/.zcache          # directory mode
 zimp inspect .fusion/.zcache         # project mode
+zimp inspect .fusion/assets.zpak     # lists every entry and checks that each one loads
 ```
 
 ## Running tests
@@ -175,6 +204,18 @@ defer asset.deinit(allocator); // frees the single file buffer
 
 // Or view bytes you already hold (aligned to 16):
 const view = try zimp.runtime.viewBytes(bytes, .mesh);
+```
+
+At runtime, load by `AssetId` through an `AssetStore`, which reads either the loose cooked directory (editor and dev) or the project's pack (shipping) behind the same API:
+
+```zig
+var store = try zimp.runtime.AssetStore.openProject(gpa, io, root_dir, &project_manifest, .pack);
+defer store.deinit(io);
+
+const index = store.findKind(.texture, id) orelse return error.AssetNotFound;
+var asset = try store.load(gpa, io, index); // thread-safe
+defer asset.deinit(gpa); // before store.deinit: pack assets may borrow its mapping
+upload(asset.view.texture);
 ```
 
 ### Meshes (`.zmesh`)
@@ -238,7 +279,7 @@ Preprocessed GLSL per stage with `#include` resolution and variant expansion; st
 
 Source: `.zamat` (TOML text)
 
-Binary material definitions referencing cooked shaders and textures by path hash, with inline parameter blocks packed for shader uniform upload. The material writer only hashes referenced paths and does not need cooked shader or texture outputs, but the dependency graph still records those logical edges so cache invalidation cascades correctly.
+Binary material definitions referencing cooked shaders and textures by `AssetId`, with inline parameter blocks packed for shader uniform upload. The material writer derives the ids from the referenced paths and does not need cooked shader or texture outputs, but the dependency graph still records those logical edges so cache invalidation cascades correctly.
 
 ```toml
 [material]
@@ -271,6 +312,15 @@ u_emissive_strength = 0.0
 
 When `.glb` or `.gltf` files contain materials, zimp auto-generates material source files under `generated/materials/` and embedded image files under `generated/textures/`, then rescans so they cook in the same run. Generated sources get deterministic derived `AssetId`s (a pure function of their path — no sidecars) so regenerating them never changes identity. Hand-written files in `materials/` with the same generated filename take priority and are never overwritten. GLTF PBR fields map to standard slots and uniforms: base color texture to `albedo`, metallic-roughness texture to `roughness_metallic`, normal to `normal`, occlusion to `ao`, emissive texture to `emissive`, and factors to `u_base_color`, `u_metallic`, `u_roughness`, and `u_emissive`.
 
+### Packs (`.zpak`)
+
+Built by `zimp pack`. A 40-byte header, then the payloads, then the table of contents: an entry table sorted by (kind, id), a chunk table, and the entry names (cooked paths, for tools and diagnostics only). Opening a pack is one mmap plus a linear validation of the table; lookup is a binary search inside a kind's range.
+
+- Payloads are the cooked files byte for byte (`none`, viewed in place in the mapping) or one zstd frame per 256 KiB of the asset (`zstd`, decoded into a buffer). Frames decode independently, so a reader can decode just a prefix (texture mips are stored smallest first) or decode frames in parallel.
+- Payloads of 64 KiB or more start on a 4 KiB boundary; smaller ones pack at 16 bytes, so many small assets share a page. Kinds are grouped, so all shaders and materials sit together.
+- Loads of large payloads ask the kernel to read ahead, and raw entries are faulted in on the loading thread, so whoever touches the asset next (the GL upload) never stalls on the disk.
+- Like every cooked format, the table must have exactly the layout the writer produces: entries strictly sorted with unique non-zero ids, each payload exactly where the alignment rule puts it, chunk and name tables exactly filled, nothing trailing. Payloads are validated by their own views when loaded.
+
 ## Incremental builds
 
 zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. Project mode stores it at `<project>/.fusion/.zcache`; directory mode stores it inside the selected output directory. This keeps independent projects and output roots from sharing mutable cache state. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
@@ -295,7 +345,6 @@ Cooked paths preserve the source directory structure and replace the source exte
 
 ## Planned
 
-- `zimp pack` — combine cooked assets into a single archive with a sorted TOC for O(log n) lookup (the CLI command exists as a stub).
 - Audio (`.wav`, `.ogg`) and font (`.ttf`) cooking.
 - Skeleton/animation extraction from glTF.
 - SPIR-V shader compilation with reflection extraction for a future Vulkan backend.

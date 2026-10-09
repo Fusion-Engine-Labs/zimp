@@ -17,52 +17,32 @@ pub const AssetView = union(enum) {
     material: material_format.Zamat,
 };
 
-/// A loaded cooked asset: one aligned allocation holding the file bytes plus
-/// a view into it.
+/// A loaded cooked asset: its bytes plus a view into them.
 pub const Asset = struct {
-    bytes: []align(wire.section_alignment) u8,
+    /// The bytes `view` points into.
+    bytes: wire.Bytes,
     view: AssetView,
+    /// The heap buffer behind `bytes`, freed by `deinit`. Null when `bytes`
+    /// borrows a mapped pack, which must then outlive the asset.
+    owned: ?[]align(wire.section_alignment) u8 = null,
 
     pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
-        allocator.free(self.bytes);
+        if (self.owned) |bytes| allocator.free(bytes);
         self.* = undefined;
     }
-};
 
-pub const CookedStore = struct {
-    root: []u8,
-    dir: std.Io.Dir,
-
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !CookedStore {
-        const cwd = std.Io.Dir.cwd();
-        const dir = try std.Io.Dir.openDir(cwd, io, root, .{});
-        errdefer dir.close(io);
-        return initFromDir(allocator, root, dir);
-    }
-
-    pub fn initFromDir(allocator: std.mem.Allocator, root: []const u8, dir: std.Io.Dir) !CookedStore {
-        return .{
-            .root = try allocator.dupe(u8, root),
-            .dir = dir,
-        };
-    }
-
-    pub fn deinit(self: *CookedStore, allocator: std.mem.Allocator, io: std.Io) void {
-        self.dir.close(io);
-        allocator.free(self.root);
-    }
-
-    /// Reads a cooked file into a buffer suitable for `viewBytes`.
-    pub fn readAlloc(
-        self: *CookedStore,
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        normalized_path: []const u8,
-    ) ![]align(wire.section_alignment) u8 {
-        try path_helpers.validateVirtual(normalized_path);
-        return file_read.readFileAligned(allocator, io, self.dir, normalized_path);
+    /// Takes ownership of `bytes` if they validate as `kind`; frees them if not.
+    pub fn fromOwned(allocator: std.mem.Allocator, bytes: []align(wire.section_alignment) u8, kind: AssetKind) !Asset {
+        errdefer allocator.free(bytes);
+        return .{ .bytes = bytes, .owned = bytes, .view = try viewBytes(bytes, kind) };
     }
 };
+
+/// Where a build's cooked assets are loaded from, by `AssetId`: the loose
+/// cooked directory (editor and dev) or a `.zpak` (shipping).
+pub const AssetStore = @import("runtime/asset_store.zig").AssetStore;
+pub const LooseStore = @import("runtime/loose_store.zig").LooseStore;
+pub const PackStore = @import("runtime/pack_store.zig").PackStore;
 
 pub fn detectKind(path: []const u8) ?AssetKind {
     return AssetKind.fromCookedPath(path);
@@ -76,9 +56,7 @@ pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
 
     const asset_kind = detectKind(normalized_path) orelse return error.UnsupportedAssetType;
 
-    const bytes = try file_read.readFileAligned(allocator, io, dir, normalized_path);
-    errdefer allocator.free(bytes);
-    return .{ .bytes = bytes, .view = try viewBytes(bytes, asset_kind) };
+    return .fromOwned(allocator, try file_read.readFileAligned(allocator, io, dir, normalized_path), asset_kind);
 }
 
 /// Validates `bytes` as a cooked asset of `asset_kind` and returns a view
@@ -123,6 +101,7 @@ test "loadFromFile loads zmesh as an in-place view" {
     defer asset.deinit(testing.allocator);
 
     try testing.expect(asset.view == .mesh);
+    try testing.expect(asset.owned != null);
     const model = asset.view.mesh;
     try testing.expectEqual(@as(usize, 1), model.partCount());
     try testing.expectEqual(@as(u32, 3), model.vertexCount());
@@ -144,6 +123,12 @@ test "loadFromFile frees the buffer when validation fails" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "bad.zmesh", .data = "not a mesh at all" });
 
     try testing.expectError(error.InvalidMagic, loadFromFile(testing.allocator, testing.io, tmp.dir, "bad.zmesh"));
+}
+
+test {
+    _ = @import("runtime/asset_store.zig");
+    _ = @import("runtime/loose_store.zig");
+    _ = @import("runtime/pack_store.zig");
 }
 
 test "viewBytes dispatches on asset kind" {

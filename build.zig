@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
         .file = b.path("external/image/stb_image.c"),
         .flags = &.{"-O3"},
     });
+    addZstd(b, mod, target);
     mod.link_libc = true;
 
     const exe = b.addExecutable(.{
@@ -40,6 +41,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addIncludePath(b.path("external/image"));
+    exe.root_module.addIncludePath(b.path("external/zstd"));
     exe.root_module.addImport("zob", zob_mod);
 
     b.installArtifact(exe);
@@ -86,4 +88,48 @@ pub fn build(b: *std.Build) void {
         perf_cmd.addArgs(args);
     }
     perf_step.dependOn(&perf_cmd.step);
+}
+
+/// Vendored zstd (external/zstd): the pack writer compresses with it and
+/// the runtime decompresses with it. Always built optimized, like stb_image,
+/// so Debug builds still load packs at full speed.
+fn addZstd(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const flags: []const []const u8 = &.{ "-O3", "-DXXH_NAMESPACE=ZSTD_", "-DZSTD_LEGACY_SUPPORT=0" };
+    mod.addIncludePath(b.path("external/zstd"));
+    mod.addCSourceFiles(.{
+        .root = b.path("external/zstd"),
+        .files = &.{
+            "common/debug.c",
+            "common/entropy_common.c",
+            "common/error_private.c",
+            "common/fse_decompress.c",
+            "common/pool.c",
+            "common/threading.c",
+            "common/xxhash.c",
+            "common/zstd_common.c",
+            "compress/fse_compress.c",
+            "compress/hist.c",
+            "compress/huf_compress.c",
+            "compress/zstd_compress.c",
+            "compress/zstd_compress_literals.c",
+            "compress/zstd_compress_sequences.c",
+            "compress/zstd_compress_superblock.c",
+            "compress/zstd_double_fast.c",
+            "compress/zstd_fast.c",
+            "compress/zstd_lazy.c",
+            "compress/zstd_ldm.c",
+            "compress/zstd_opt.c",
+            "compress/zstd_preSplit.c",
+            "compress/zstdmt_compress.c",
+            "decompress/huf_decompress.c",
+            "decompress/zstd_ddict.c",
+            "decompress/zstd_decompress.c",
+            "decompress/zstd_decompress_block.c",
+        },
+        .flags = flags,
+    });
+    // The BMI2 Huffman decoder; zstd only enables it on x86_64 ELF/Mach-O.
+    if (target.result.cpu.arch == .x86_64 and target.result.os.tag != .windows) {
+        mod.addCSourceFile(.{ .file = b.path("external/zstd/decompress/huf_decompress_amd64.S"), .flags = flags });
+    }
 }

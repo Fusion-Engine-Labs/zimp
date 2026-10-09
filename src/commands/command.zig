@@ -29,7 +29,7 @@ pub const Command = union(enum) {
         }
 
         if (std.mem.eql(u8, args[1], "pack")) {
-            const cmd = PackCommand.parseFromArgs(io, args) catch |err| {
+            const cmd = PackCommand.parseFromArgs(allocator, io, args) catch |err| {
                 log.err("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
@@ -104,7 +104,7 @@ test "Command.parse routes to Cook variant" {
 }
 
 test "Command.parse routes to Pack variant" {
-    const args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
+    const args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "x.zpak" };
     const cmd = try Command.parse(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
@@ -167,10 +167,18 @@ test "Command.run dispatches to correct subcommand" {
     defer cook.deinit();
     try cook.run(.none);
 
-    const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
-    const pack = try Command.parse(testing.allocator, testing.io, pack_args);
+    // Packing the (empty) cook output needs its `.zcache`, which the cook above wrote.
+    var pack_out_tmp = testing.tmpDir(.{});
+    defer pack_out_tmp.cleanup();
+    const pack: Command = .{ .pack = .{
+        .allocator = testing.allocator,
+        .io = testing.io,
+        .input = .{ .source = try output_tmp.dir.openDir(testing.io, ".", .{}) },
+        .output = "command-test.zpak",
+    } };
     defer pack.deinit();
-    try testing.expectError(error.PackNotImplemented, pack.run(.none));
+    defer std.Io.Dir.cwd().deleteFile(testing.io, "command-test.zpak") catch {};
+    try pack.run(.none);
 
     // Inspect: write a temp zmesh file since examples/output may not exist on CI
     var tmp = testing.tmpDir(.{});
@@ -198,7 +206,7 @@ test "Command.deinit cleans up all variants" {
     const cook = try Command.parse(testing.allocator, testing.io, cook_args);
     cook.deinit();
 
-    const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
+    const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "x.zpak" };
     const pack = try Command.parse(testing.allocator, testing.io, pack_args);
     pack.deinit();
 

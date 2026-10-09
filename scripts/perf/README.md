@@ -39,5 +39,11 @@ With `--load-bench` (passed automatically by `zig build perf`), every cold
 sample is also load-benchmarked: `zimp-load-bench` (`load_bench.zig`) loads
 each cooked file through `runtime.loadFromFile` repeatedly, after a warm-up
 pass, and the suite reports median pass time, per-file cost, and throughput
-per asset kind. The suite also breaks down cooked output bytes per kind. See
+per asset kind. The suite also breaks down cooked output bytes per kind.
+
+Each cold output is also packed twice with `zimp pack --source`, as
+`pack-zstd.zpak` (the default policy) and `pack-raw.zpak` (`--no-compress`).
+The suite reports pack time and size, and the load bench loads every asset
+from each pack through `runtime.PackStore`, mapping the pack afresh for every
+pass so page faults count, and reports the pack open time separately. See
 `PERFORMANCE.md` for the baseline and per-item before/after numbers.

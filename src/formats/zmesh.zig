@@ -546,6 +546,11 @@ pub fn write(allocator: std.mem.Allocator, writer: *std.Io.Writer, material_slot
 /// Writes a small single-part mesh with normals and uv0. Used by inspector
 /// and command tests.
 pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
+    return writeTestZmeshFileWithMaterial(writer, test_material_id);
+}
+
+/// `writeTestZmeshFile` with `material` in its one material slot.
+pub fn writeTestZmeshFileWithMaterial(writer: *std.Io.Writer, material: AssetId) !void {
     var vertices = [_]mesh.CookedVertex{
         testVertex(.{ 0, 0, 0, 0 }),
         testVertex(.{ 65535, 0, 0, 0 }),
@@ -564,7 +569,7 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
         },
         .transform = identity_transform,
     }};
-    const material_slots = [_]AssetId{test_material_id};
+    const material_slots = [_]AssetId{material};
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
     try ZMesh.write(fba.allocator(), writer, &material_slots, &parts, .{});
