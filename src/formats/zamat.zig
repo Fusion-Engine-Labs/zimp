@@ -132,6 +132,7 @@ pub const Zamat = struct {
 
         var order = wire.SectionOrder.init(HEADER_SIZE);
         for ([_]wire.Span{ header.texture_slots, header.params, header.variants, header.param_data, header.strings }) |span| try order.next(span);
+        try order.finish(bytes.len);
 
         const strings = try wire.sectionSlice(u8, bytes, header.strings, header.strings.len);
         const param_data = try wire.sectionSlice(u8, bytes, header.param_data, header.param_data.len);

@@ -28,5 +28,5 @@ fn cookGlb(input: *const CookInput) !void {
     const material_ids = try input.referenceIds(material_paths);
     defer input.allocator.free(material_ids);
 
-    try ZMesh.write(input.writer, material_ids, model.parts);
+    try ZMesh.write(input.allocator, input.writer, material_ids, model.parts, .{});
 }

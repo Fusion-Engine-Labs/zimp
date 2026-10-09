@@ -1,7 +1,9 @@
 #version 330 core
 // VARIANTS: ALPHA_TEST, ALPHA_BLEND, DOUBLE_SIDED, HAS_ALBEDO_MAP, HAS_NORMAL_MAP, HAS_AO, HAS_EMISSIVE, HAS_METALLIC_ROUGHNESS_MAP
 
-layout(location = 0) in vec3 a_position;
+// Positions are unorm16 over the part AABB; tangents are snorm8 octahedral
+// xy plus a handedness sign in z.
+layout(location = 0) in vec4 a_position;
 layout(location = 1) in vec2 a_normal_oct;
 layout(location = 2) in vec2 a_uv0;
 layout(location = 3) in vec2 a_uv1;
@@ -13,6 +15,8 @@ uniform mat4 u_projection;
 uniform mat3 u_normal_matrix;
 uniform vec2 u_uv0_min;
 uniform vec2 u_uv0_scale;
+uniform vec3 u_pos_min;
+uniform vec3 u_pos_scale;
 
 out vec3 v_world_pos;
 out vec3 v_normal;
@@ -30,11 +34,12 @@ vec3 decodeOctNormal(vec2 e) {
 }
 
 void main() {
-  vec4 world = u_model * vec4(a_position, 1.0);
+  vec4 world = u_model * vec4(u_pos_min + a_position.xyz * u_pos_scale, 1.0);
   v_world_pos = world.xyz;
 
   v_normal = normalize(u_normal_matrix * decodeOctNormal(a_normal_oct));
-  v_tangent = vec4(u_normal_matrix * a_tangent.xyz, a_tangent.w);
+  float handedness = a_tangent.z < 0.0 ? -1.0 : 1.0;
+  v_tangent = vec4(normalize(u_normal_matrix * decodeOctNormal(a_tangent.xy)), handedness);
 
   v_uv0 = u_uv0_min + a_uv0 * u_uv0_scale;
   v_uv1 = a_uv1;
