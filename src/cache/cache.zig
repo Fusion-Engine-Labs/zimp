@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetKind = @import("../assets/asset.zig").AssetKind;
 const CacheEntry = @import("entry.zig").CacheEntry;
+const FLAG_ERRORED = @import("entry.zig").FLAG_ERRORED;
 const dep_graph_mod = @import("cache_dep_graph.zig");
 const CacheDepGraph = dep_graph_mod.CacheDepGraph;
 const DependencyRef = dep_graph_mod.DependencyRef;
@@ -17,11 +18,12 @@ const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
 const constants = @import("../shared/constants.zig");
 const ProjectId = @import("../id/id_types.zig").ProjectId;
+const TargetProfile = @import("../assets/cooked/target_profile.zig").TargetProfile;
 
-pub const VERSION = 8;
+pub const VERSION = 9;
 pub const MAGIC = constants.FORMAT_MAGIC.ZACHE;
 
-pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16; // magic + version + entry_count + output_dir_len + host_os_len + project_id
+pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16 + 1; // magic + version + entry_count + output_dir_len + host_os_len + project_id + target_profile
 
 pub const CacheHeader = struct {
     version: u16 = VERSION,
@@ -49,6 +51,8 @@ pub const Cache = struct {
     host_os: []const u8 = "",
     /// Namespace of the `AssetId`s embedded in cooked meshes and materials.
     project_id: ProjectId = .zero,
+    /// Profile the cached textures were encoded for.
+    target_profile: TargetProfile = .host(),
     dirty: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
@@ -98,6 +102,20 @@ pub const Cache = struct {
     pub fn setProjectId(self: *Cache, project_id: ProjectId) void {
         if (self.project_id.eql(project_id)) return;
         self.project_id = project_id;
+        self.dirty = true;
+    }
+
+    /// Retargets the cache. Entries whose encoding depends on the profile are
+    /// marked errored, so they recook and stay errored if that recook fails
+    /// before replacing their output (an old-profile output never reads as
+    /// cached under the new profile).
+    pub fn setTargetProfile(self: *Cache, target_profile: TargetProfile) void {
+        if (self.target_profile == target_profile) return;
+        for (self.entries.items) |*entry| {
+            const kind = entry.asset_kind orelse continue;
+            if (kind.dependsOnTargetProfile()) entry.flags |= FLAG_ERRORED;
+        }
+        self.target_profile = target_profile;
         self.dirty = true;
     }
 
@@ -238,6 +256,7 @@ pub const Cache = struct {
         try io_writer.writeInt(u16, @intCast(self.host_os.len), .little);
         try io_writer.writeAll(self.host_os);
         try io_writer.writeAll(&self.project_id.uuid.bytes);
+        try io_writer.writeByte(@intFromEnum(self.target_profile));
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
@@ -340,6 +359,7 @@ pub const Cache = struct {
 
         var project_id_bytes: [16]u8 = undefined;
         try reader.readSliceAll(&project_id_bytes);
+        const target_profile = std.enums.fromInt(TargetProfile, try reader.takeByte()) orelse return error.InvalidTargetProfile;
 
         var entries: std.ArrayList(CacheEntry) = .empty;
         errdefer {
@@ -454,6 +474,7 @@ pub const Cache = struct {
             .output_dir_path = output_dir_path,
             .host_os = host_os,
             .project_id = .fromBytes(project_id_bytes),
+            .target_profile = target_profile,
             .dirty = false,
         };
     }
@@ -586,6 +607,7 @@ fn writeTestCacheWithOutputDirAndDependencies(
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little);
     try writer.writeAll(currentHostOsName());
     try writer.writeAll(&ProjectId.zero.uuid.bytes);
+    try writer.writeByte(@intFromEnum(TargetProfile.host()));
 
     for (entries) |entry| {
         try writer.writeInt(u64, entry.source_path_hash, .little);
@@ -1017,6 +1039,7 @@ test "read errors on truncated entry data" {
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little); // host_os len
     try writer.writeAll(currentHostOsName()); // host_os
     try writer.writeAll(&ProjectId.zero.uuid.bytes); // project_id
+    try writer.writeByte(@intFromEnum(TargetProfile.host())); // target_profile
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -1091,10 +1114,10 @@ test "write then read round-trip with zero entries" {
 }
 
 test "HEADER_SIZE matches expected layout" {
-    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16), HEADER_SIZE);
+    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16) + 16 + 1), HEADER_SIZE);
 }
 
-test "write then readFromDir preserves the project id" {
+test "write then readFromDir preserves the project id and target profile" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1102,11 +1125,14 @@ test "write then readFromDir preserves the project id" {
     defer c.deinit(testing.allocator);
     const project_id = ProjectId.parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc");
     c.setProjectId(project_id);
+    const other_profile: TargetProfile = if (TargetProfile.host() == .gl41) .desktop else .gl41;
+    c.setTargetProfile(other_profile);
     try c.write(testing.allocator, testing.io, tmp.dir, ".zcache");
 
     var c2 = try Cache.readFromDir(testing.allocator, testing.io, tmp.dir, ".", tmp.dir, ".zcache");
     defer c2.deinit(testing.allocator);
     try testing.expect(c2.project_id.eql(project_id));
+    try testing.expectEqual(other_profile, c2.target_profile);
 }
 
 test "upsertEntry inserts new entry when not in cache" {
@@ -1149,4 +1175,23 @@ test "upsertEntry handles multiple distinct entries" {
     try c.upsertEntry(testing.allocator, sf_b, try makeTestEntry(testing.allocator, "b.glb", "b.zmesh"));
 
     try testing.expectEqual(@as(u32, 2), c.header.entry_count);
+}
+
+test "setTargetProfile marks only profile-dependent entries errored" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    var texture = try makeTestEntry(testing.allocator, "a.png", "a.ztex");
+    texture.asset_kind = .texture;
+    try c.upsertEntry(testing.allocator, SourceFile{ .path = "a.png", .extension = .png }, texture);
+    try c.upsertEntry(testing.allocator, SourceFile{ .path = "b.glb", .extension = .glb }, try makeTestEntry(testing.allocator, "b.glb", "b.zmesh"));
+
+    c.setTargetProfile(c.target_profile);
+    try testing.expect(!c.entries.items[0].isErrored());
+
+    const other_profile: TargetProfile = if (c.target_profile == .gl41) .desktop else .gl41;
+    c.setTargetProfile(other_profile);
+    try testing.expectEqual(other_profile, c.target_profile);
+    try testing.expect(c.entries.items[0].isErrored());
+    try testing.expect(!c.entries.items[1].isErrored());
 }

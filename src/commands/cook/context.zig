@@ -1,5 +1,6 @@
 const std = @import("std");
 const ProjectId = @import("../../id/id_types.zig").ProjectId;
+const TargetProfile = @import("../../assets/cooked/target_profile.zig").TargetProfile;
 
 /// Present when cooking a project (`zimp cook --project <root>`): after the
 /// cook, the pipeline builds `assets.zmanifest`
@@ -19,6 +20,8 @@ pub const CookContext = struct {
     output: std.Io.Dir,
     output_path: []const u8,
     force: bool,
+    /// Graphics capabilities to encode for (texture formats).
+    target_profile: TargetProfile = .host(),
     project: ?ProjectCookInfo = null,
 
     /// Namespace for `AssetId`s embedded in cooked references. Directory-mode

@@ -22,6 +22,15 @@ pub const AssetKind = enum(u8) {
         };
     }
 
+    /// Kinds whose cooked encoding depends on the cook's `TargetProfile`, so
+    /// they must be recooked when it changes.
+    pub fn dependsOnTargetProfile(self: AssetKind) bool {
+        return switch (self) {
+            .texture => true,
+            .mesh, .shader_stage, .material => false,
+        };
+    }
+
     /// Kinds whose cooked bytes embed project-scoped `AssetId` references, so
     /// they must be recooked when the project id changes.
     pub fn embedsAssetIds(self: AssetKind) bool {

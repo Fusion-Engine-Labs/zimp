@@ -2,6 +2,8 @@ const std = @import("std");
 
 const TexelFormat = @import("../texture.zig").TexelFormat;
 
+pub const bc1 = @import("bc1.zig");
+pub const bc3 = @import("bc3.zig");
 pub const bc4 = @import("bc4.zig");
 pub const bc5 = @import("bc5.zig");
 pub const bc7 = @import("bc7.zig");
@@ -22,7 +24,7 @@ pub const ChannelView = struct {
 /// `src` layout depends on `format`:
 ///   - .bc4:  width*height  bytes (single channel)
 ///   - .bc5:  width*height*2 bytes (RG interleaved)
-///   - .bc7:  width*height*4 bytes (RGBA8)
+///   - .bc1, .bc3, .bc7:  width*height*4 bytes (RGBA8)
 ///   - .bc6h: width*height*6 bytes (RGB f16 little-endian, same as rgb16f)
 ///
 /// `dst.len` must equal `format.imageSize(width, height)`.
@@ -35,6 +37,8 @@ pub fn encode(
 ) void {
     std.debug.assert(dst.len == format.imageSize(width, height));
     switch (format) {
+        .bc1 => bc1.encode(src, width, height, dst),
+        .bc3 => bc3.encode(src, width, height, dst),
         .bc4 => bc4.encode(src, width, height, dst),
         .bc5 => bc5.encode(src, width, height, dst),
         .bc7 => bc7.encode(src, width, height, dst),

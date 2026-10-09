@@ -2,6 +2,7 @@ const std = @import("std");
 
 const path = @import("../path.zig");
 const ProjectId = @import("../id/id_types.zig").ProjectId;
+const TargetProfile = @import("../assets/cooked/target_profile.zig").TargetProfile;
 const atomic_file = @import("../shared/atomic_file.zig");
 
 const log = @import("../logger.zig");
@@ -40,6 +41,9 @@ pub const ProjectManifest = struct {
     cooked_assets_dir: []const u8 = DEFAULT_COOKED_ASSETS_DIR,
     asset_manifest: []const u8 = DEFAULT_ASSET_MANIFEST,
     default_scene: ?[]const u8 = null,
+    /// Graphics profile to cook for. Null cooks for the host
+    /// (`TargetProfile.host()`); `zimp cook --profile` overrides both.
+    target_profile: ?TargetProfile = null,
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !ProjectManifest {
         const normalized_path = try path.normalizeVirtual(allocator, file);
@@ -135,6 +139,7 @@ pub const ProjectManifest = struct {
             .cooked_assets_dir = cooked_assets_dir,
             .asset_manifest = asset_manifest,
             .default_scene = default_scene,
+            .target_profile = self.target_profile,
         };
     }
 

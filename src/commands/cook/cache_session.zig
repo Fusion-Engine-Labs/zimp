@@ -45,7 +45,12 @@ pub const CacheSession = struct {
             };
         };
 
-        return .{ .cache = cache };
+        var session: CacheSession = .{ .cache = cache };
+        if (session.cache.target_profile != ctx.target_profile) {
+            log.debug("Target profile changed from {s} to {s}, recooking textures", .{ @tagName(session.cache.target_profile), @tagName(ctx.target_profile) });
+            session.cache.setTargetProfile(ctx.target_profile);
+        }
+        return session;
     }
 
     pub fn deinit(self: *CacheSession, allocator: std.mem.Allocator) void {

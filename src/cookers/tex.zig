@@ -16,7 +16,7 @@ fn cookTexture(input: *const CookInput) !void {
     const raw = try RawTexture.init(input.source.path, @constCast(input.bytes));
     defer raw.deinit(temporary_allocator);
 
-    var cooked = try CookedTexture.cook(temporary_allocator, &raw);
+    var cooked = try CookedTexture.cook(temporary_allocator, &raw, input.target_profile);
     defer cooked.deinit(temporary_allocator);
 
     try Zatex.write(input.writer, cooked);
