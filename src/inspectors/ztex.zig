@@ -10,7 +10,8 @@ fn inspectZtex(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     const texture = try ztex.view(bytes);
 
     log.info("zatex v{d}", .{ztex.ZATEX_VERSION});
-    log.info("  Dimensions: {d} x {d}", .{ texture.width, texture.height });
+    log.info("  Dimensions: {d} x {d} x {d}", .{ texture.width, texture.height, texture.depth });
+    log.info("  Layers:     {d}", .{texture.array_layers});
     log.info("  Type:       {s}", .{@tagName(texture.texture_type)});
     log.info("  Format:     {s}", .{@tagName(texture.format)});
     log.info("  Color sp:   {s}", .{@tagName(texture.color_space)});
@@ -18,23 +19,25 @@ fn inspectZtex(_: std.mem.Allocator, bytes: wire.Bytes) !void {
 
     log.info("", .{});
     log.info("Mip Levels:", .{});
-    log.info("  {s: >5}  {s: >8}  {s: >8}  {s: >10}  {s: >10}", .{ "level", "width", "height", "offset", "size" });
-    log.info("  {s}", .{"-" ** 52});
+    log.info("  {s: >5}  {s: >8}  {s: >8}  {s: >6}  {s: >10}  {s: >10}", .{ "level", "width", "height", "depth", "offset", "size" });
+    log.info("  {s}", .{"-" ** 60});
 
     var total_data_size: u64 = 0;
-    for (texture.mips, 0..) |mip, i| {
-        total_data_size += mip.data.len;
+    for (texture.mips, 0..) |span, i| {
+        total_data_size += span.len;
+        const extent = texture.mipExtent(i);
         var size_buf: [16]u8 = undefined;
-        log.info("  {d: >5}  {d: >8}  {d: >8}  {d: >10}  {s: >10}", .{
+        log.info("  {d: >5}  {d: >8}  {d: >8}  {d: >6}  {d: >10}  {s: >10}", .{
             i,
-            mip.width,
-            mip.height,
-            mip.data.offset,
-            fmt.formatBytes(&size_buf, mip.data.len),
+            extent.width,
+            extent.height,
+            extent.depth,
+            span.offset,
+            fmt.formatBytes(&size_buf, span.len),
         });
     }
 
-    const mip_meta_size: u64 = texture.mips.len * @sizeOf(ztex.MipEntry);
+    const mip_meta_size: u64 = texture.mips.len * @sizeOf(wire.Span);
 
     log.info("", .{});
     log.info("File Size Summary:", .{});
@@ -56,23 +59,8 @@ pub fn inspector() FormatInspector {
 }
 
 test "inspectZtex reports a layout error for overlapping mips instead of crashing" {
-    var buf: [1024]u8 align(wire.section_alignment) = undefined;
-    const data_offset = ztex.HEADER_SIZE + 32 * @sizeOf(ztex.MipEntry);
-    var writer = std.Io.Writer.fixed(&buf);
-    var out: wire.LayoutWriter = .{ .writer = &writer };
-    try out.value(ztex.Header{
-        .file = .init(ztex.MAGIC, ztex.ZATEX_VERSION, data_offset + 1),
-        .width = 1,
-        .height = 1,
-        .mip_count = 32,
-        .format = @intFromEnum(cooked_texture.TexelFormat.r8),
-        .texture_type = @intFromEnum(ztex.TextureType.texture_2d),
-        .color_space = 1,
-    });
-    for (0..32) |_| try out.value(ztex.MipEntry{ .width = 1, .height = 1, .data = .{ .offset = data_offset, .len = 1 } });
-    try out.bytes(&.{0});
-
-    try std.testing.expectError(error.OverlappingSections, inspectZtex(std.testing.allocator, buf[0..writer.end]));
+    var buf: [256]u8 align(wire.section_alignment) = undefined;
+    try std.testing.expectError(error.OverlappingSections, inspectZtex(std.testing.allocator, ztex.writeAliasedMipFile(&buf)));
 }
 
 test "inspectZtex uses the format view" {

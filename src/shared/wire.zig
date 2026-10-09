@@ -34,6 +34,8 @@ pub const FileHeader = extern struct {
         const header = try structAt(FileHeader, bytes, 0);
         if (!std.mem.eql(u8, &header.magic, magic)) return error.InvalidMagic;
         if (header.version != version) return error.UnsupportedVersion;
+        // `Layout` never produces a larger file, so views reject one too.
+        if (header.total_size > max_asset_bytes) return error.AssetTooLarge;
         if (header.total_size != bytes.len) return error.InvalidFileSize;
         if (header.flags != 0) return error.UnsupportedFlags;
         return header;
@@ -274,6 +276,11 @@ test "FileHeader.validate rejects bad magic, version, and size" {
     @memcpy(long[0..16], std.mem.asBytes(&FileHeader.init("GOOD", 1, 32)));
     _ = try FileHeader.validate(&long, "GOOD", 1);
     try std.testing.expectError(error.InvalidFileSize, FileHeader.validate(long[0..16], "GOOD", 1));
+
+    // Checked before the length, so a claimed oversize file is rejected
+    // without needing a 512 MiB buffer.
+    @memcpy(long[0..16], std.mem.asBytes(&FileHeader.init("GOOD", 1, max_asset_bytes + 1)));
+    try std.testing.expectError(error.AssetTooLarge, FileHeader.validate(&long, "GOOD", 1));
 }
 
 test "SectionOrder rejects overlapping and out-of-order sections" {
