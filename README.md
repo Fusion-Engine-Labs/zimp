@@ -11,8 +11,8 @@ Designed for the [Fusion Game Engine](https://github.com/Fusion-Engine) but full
 - **Project mode** — `zimp cook --project <root>` reads `.fusion/fusion.proj` and derives all directories from the project manifest; no hand-wired source/output paths.
 - **SoA mesh layout** — vertex streams stored separately (positions, normals, UVs) so the engine binds only what each render pass needs.
 - **Vertex quantization** — octahedral normals (`[2]i16`), `f16` tangents, normalized `u16` UVs, `u16` indices where they fit.
-- **Texture classification** — automatic format selection (BC7/BC5/BC4) from filename convention (`*_albedo`, `*_normal`, ...) and material slot.
-- **Block compression** — built-in BC4, BC5, BC6H, and BC7 encoders written in Zig. No external texture tools required.
+- **Texture classification** — automatic format selection from filename convention (`*_albedo`, `*_normal`, ...) and material slot, for an explicit target profile (`gl41` or `desktop`).
+- **Block compression** — built-in BC1, BC3, BC4, BC5, BC6H, and BC7 encoders written in Zig. No external texture tools required.
 - **Shader preprocessing** — `#include` resolution and variant expansion; cooked shaders store final GLSL source per stage.
 - **glTF material extraction** — materials and embedded images inside `.glb`/`.gltf` are auto-generated as sources under `generated/` (with deterministic derived ids) and cooked in the same run.
 - **Incremental builds** — content-hashed `.zcache` with dependency graph tracking. Only re-cooks what changed.
@@ -105,6 +105,9 @@ zimp cook --source assets/ --output cooked/
 
 # Force a full recook, ignoring the incremental cache
 zimp cook --project . --force
+
+# Cook textures for a specific graphics profile (overrides fusion.proj)
+zimp cook --project . --profile desktop
 
 # Emit machine-readable metrics for CI parsing
 zimp cook --source assets/ --output cooked/ --metrics-json
@@ -213,16 +216,17 @@ that format are recooked.
 
 Source: `.png`, `.jpg`, `.jpeg`, `.hdr`
 
-Pre-mipmapped and block-compressed. Format is auto-selected by texture classification:
+Pre-mipmapped and block-compressed. Format is auto-selected by texture classification and the target profile. The profile comes from `--profile`, else `"target_profile"` in `fusion.proj`, else the host (`gl41` on macOS, `desktop` elsewhere). Changing it recooks every texture (and, through the dependency graph, the materials and meshes that reference them).
 
-| Usage | Format | Classification |
-|-------|--------|----------------|
-| Color / Albedo | BC7 (sRGB) | `*_albedo.*`, `*_diffuse.*`, `*_basecolor.*` |
-| Normal maps | BC5 (linear) | `*_normal.*`, `*_nrm.*` |
-| Roughness / Metallic / AO (packed) | BC7 (linear) | `*_orm.*`, `*_rm.*` |
-| Single channel (roughness, height, AO) | BC4 (linear) | `*_roughness.*`, `*_height.*`, `*_ao.*` |
+| Usage | `desktop` (GL 4.2+ / Vulkan) | `gl41` (macOS) | Classification |
+|-------|------------------------------|----------------|----------------|
+| Color / Albedo (sRGB) | BC7 | BC1, or BC3 if any texel has alpha | `*_albedo.*`, `*_diffuse.*`, `*_basecolor.*` |
+| Normal maps | BC5 | BC5 | `*_normal.*`, `*_nrm.*` |
+| Roughness / Metallic / AO (packed) | BC7 | BC1, or BC3 if any texel has alpha | `*_orm.*`, `*_rm.*` |
+| Single channel (roughness, height, AO) | BC4 | BC4 | `*_roughness.*`, `*_height.*`, `*_ao.*` |
+| HDR | BC6H | RGB9_E5 | `.hdr` |
 
-Classification priority: material slot name > filename convention > default (BC7 sRGB).
+Classification priority: material slot name > filename convention > default (color).
 
 ### Shaders (`.zshdr`)
 

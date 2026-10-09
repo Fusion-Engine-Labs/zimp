@@ -267,6 +267,7 @@ const CookJobRunner = struct {
             .io = self.ctx.io,
             .source_dir = self.ctx.source,
             .project_id = self.ctx.projectId(),
+            .target_profile = self.ctx.target_profile,
             .source = self.record.source,
             .bytes = source_bytes,
             .writer = &file_writer.interface,

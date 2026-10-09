@@ -3,6 +3,7 @@ const std = @import("std");
 const path_helpers = @import("../path.zig");
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const ProjectId = @import("../id/id_types.zig").ProjectId;
+const TargetProfile = @import("../assets/cooked/target_profile.zig").TargetProfile;
 const AssetId = @import("../id/id_types.zig").AssetId;
 const derive = @import("../manifest/derive.zig");
 
@@ -18,6 +19,7 @@ pub const CookInput = struct {
     /// Namespace for the `AssetId`s of referenced assets (see
     /// `manifest/derive.zig:assetIdForReference`).
     project_id: ProjectId,
+    target_profile: TargetProfile = .host(),
     source: SourceFile,
     bytes: []const u8,
     writer: *std.Io.Writer,

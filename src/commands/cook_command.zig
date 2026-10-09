@@ -5,6 +5,7 @@ const cook_pipeline = @import("cook/pipeline.zig");
 const CookContext = @import("cook/context.zig").CookContext;
 const ProjectCookInfo = @import("cook/context.zig").ProjectCookInfo;
 const ProjectRoot = @import("../project/project_root.zig").ProjectRoot;
+const TargetProfile = @import("../assets/cooked/target_profile.zig").TargetProfile;
 const cook_metrics = @import("cook_metrics.zig");
 const CountingAllocator = @import("../shared/counting_allocator.zig").CountingAllocator;
 const log = @import("../logger.zig");
@@ -19,6 +20,7 @@ pub const CookError = error{
     OutOfMemory,
     UnknownFlag,
     DuplicateFlag,
+    UnknownTargetProfile,
 };
 
 pub const CookCommand = struct {
@@ -28,6 +30,8 @@ pub const CookCommand = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     force: bool = false,
+    /// `--profile`; overrides the project's `target_profile`.
+    target_profile: ?TargetProfile = null,
     /// Set in `--project` mode; owns the manifest strings that
     /// `source`/`output`/`output_path` were derived from.
     project_root: ?*ProjectRoot = null,
@@ -70,6 +74,17 @@ pub const CookCommand = struct {
                     return CookError.MissingFlagValue;
                 }
                 project_arg = args[i + 1];
+                i += 1;
+            } else if (std.mem.eql(u8, "--profile", args[i])) {
+                if (command.target_profile != null) return CookError.DuplicateFlag;
+                if (i + 1 >= args.len) {
+                    log.err("cook: missing value for --profile", .{});
+                    return CookError.MissingFlagValue;
+                }
+                command.target_profile = TargetProfile.parse(args[i + 1]) orelse {
+                    log.err("cook: unknown --profile '{s}'; expected gl41 or desktop", .{args[i + 1]});
+                    return CookError.UnknownTargetProfile;
+                };
                 i += 1;
             } else if (std.mem.eql(u8, "--force", args[i])) {
                 if (command.force) return CookError.DuplicateFlag;
@@ -173,6 +188,7 @@ pub const CookCommand = struct {
             .output = self.output,
             .output_path = self.output_path,
             .force = self.force,
+            .target_profile = self.resolvedTargetProfile(),
             .project = if (self.project_root) |pr| ProjectCookInfo{
                 .project_id = pr.manifest.project_id,
                 .root_dir = pr.root_dir,
@@ -192,6 +208,13 @@ pub const CookCommand = struct {
         });
         cook_metrics.logSummary(&metrics);
         if (metrics.assets_errored > 0) return error.AssetCookFailed;
+    }
+
+    /// `--profile`, then the project's `target_profile`, then the host's.
+    pub fn resolvedTargetProfile(self: *const CookCommand) TargetProfile {
+        if (self.target_profile) |profile| return profile;
+        if (self.project_root) |pr| if (pr.manifest.target_profile) |profile| return profile;
+        return .host();
     }
 
     pub fn deinit(self: *const CookCommand) void {
@@ -480,4 +503,27 @@ test "project cook derives stable ids" {
             "shaders/tri2.vert",
         ),
     ));
+}
+
+test "CookCommand.parseFromArgs reads --profile" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", ".", "--profile", "gl41" };
+    const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expectEqual(TargetProfile.gl41, cmd.resolvedTargetProfile());
+}
+
+test "CookCommand.parseFromArgs defaults to the host profile" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expectEqual(TargetProfile.host(), cmd.resolvedTargetProfile());
+}
+
+test "CookCommand.parseFromArgs rejects unknown and duplicate --profile" {
+    const unknown: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", ".", "--profile", "metal" };
+    try testing.expectError(CookError.UnknownTargetProfile, CookCommand.parseFromArgs(testing.allocator, testing.io, unknown));
+    const duplicate: []const [:0]const u8 = &.{ "zimp", "cook", "--profile", "gl41", "--profile", "desktop" };
+    try testing.expectError(CookError.DuplicateFlag, CookCommand.parseFromArgs(testing.allocator, testing.io, duplicate));
 }

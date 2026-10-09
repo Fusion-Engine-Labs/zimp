@@ -81,6 +81,7 @@ pub fn start(
         .output = handle.output,
         .output_path = handle.output_path,
         .force = false,
+        .target_profile = handle.project.target_profile orelse .host(),
         .project = .{
             .project_id = handle.project.project_id,
             .root_dir = root_dir,

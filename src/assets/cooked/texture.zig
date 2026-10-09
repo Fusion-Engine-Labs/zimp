@@ -1,11 +1,12 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 const raw_texture = @import("../raw/texture.zig");
 const RawTexture = raw_texture.RawTexture;
 const TextureClass = raw_texture.TextureClass;
 const ColorSpace = raw_texture.ColorSpace;
 const compression = @import("compression/compression.zig");
+const rgb9e5 = @import("rgb9e5.zig");
+pub const TargetProfile = @import("target_profile.zig").TargetProfile;
 
 /// Target texel format for a cooked mip level. Values match the on-disk ZTex
 /// format enum so they can be written directly.
@@ -14,15 +15,22 @@ pub const TexelFormat = enum(u16) {
     rg8 = 1,
     r8 = 2,
     rgb16f = 3,
+    /// GL_RGB9_E5: 9-bit RGB mantissas with a shared 5-bit exponent, one
+    /// little-endian u32 per texel.
+    rgb9e5 = 4,
     bc4 = 10,
     bc5 = 11,
     bc7 = 12,
     bc6h = 13,
+    /// S3TC DXT1, always encoded in opaque 4-color mode.
+    bc1 = 14,
+    /// S3TC DXT5.
+    bc3 = 15,
 
     pub fn isBlockCompressed(self: TexelFormat) bool {
         return switch (self) {
-            .rgba8, .rg8, .r8, .rgb16f => false,
-            .bc4, .bc5, .bc7, .bc6h => true,
+            .rgba8, .rg8, .r8, .rgb16f, .rgb9e5 => false,
+            .bc1, .bc3, .bc4, .bc5, .bc7, .bc6h => true,
         };
     }
 
@@ -39,8 +47,9 @@ pub const TexelFormat = enum(u16) {
             .rg8 => 2,
             .r8 => 1,
             .rgb16f => 6,
-            .bc4 => 8,
-            .bc5, .bc7, .bc6h => 16,
+            .rgb9e5 => 4,
+            .bc1, .bc4 => 8,
+            .bc3, .bc5, .bc7, .bc6h => 16,
         };
     }
 
@@ -72,8 +81,8 @@ pub const CookedTexture = struct {
         allocator.free(self.mips);
     }
 
-    pub fn cook(allocator: std.mem.Allocator, raw: *const RawTexture) !CookedTexture {
-        const format = selectFormat(raw.class);
+    pub fn cook(allocator: std.mem.Allocator, raw: *const RawTexture, profile: TargetProfile) !CookedTexture {
+        const format = selectFormat(raw.class, profile, hasAlpha(raw));
         const mip_count = std.math.log2(@max(raw.width, raw.height)) + 1;
         const mips = try allocator.alloc(CookedMip, mip_count);
         errdefer allocator.free(mips);
@@ -119,24 +128,39 @@ pub const CookedTexture = struct {
     }
 };
 
-fn selectFormat(class: TextureClass) TexelFormat {
-    // Apple's OpenGL 4.1 implementation does not support the BC/BPTC formats
-    // emitted by the default cooker. Keep its cooked assets portable rather
-    // than producing textures the runtime cannot upload.
-    if (builtin.os.tag == .macos) {
-        return switch (class) {
-            .hdr_linear => .rgb16f,
-            else => .rgba8,
-        };
-    }
-
-    return switch (class) {
-        .color_srgb => .bc7,
-        .normal_linear => .bc5,
-        .single_linear => .bc4,
-        .packed_linear => .bc7,
-        .hdr_linear => .bc6h,
+fn selectFormat(class: TextureClass, profile: TargetProfile, has_alpha: bool) TexelFormat {
+    return switch (profile) {
+        // No BPTC on GL 4.1. BC1 is half the size of BC3 and BC7, so opaque
+        // color takes it; anything with alpha needs BC3.
+        .gl41 => switch (class) {
+            .color_srgb, .packed_linear => if (has_alpha) .bc3 else .bc1,
+            .normal_linear => .bc5,
+            .single_linear => .bc4,
+            .hdr_linear => .rgb9e5,
+        },
+        .desktop => switch (class) {
+            .color_srgb => .bc7,
+            .normal_linear => .bc5,
+            .single_linear => .bc4,
+            .packed_linear => .bc7,
+            .hdr_linear => .bc6h,
+        },
     };
+}
+
+/// True when any texel of the top mip has alpha below 255. Downsampling
+/// averages alpha, so an opaque top mip gives an opaque chain.
+fn hasAlpha(raw: *const RawTexture) bool {
+    if (raw.channels != 4) return false;
+    const ldr = switch (raw.pixels) {
+        .ldr => |ldr| ldr,
+        .hdr => return false,
+    };
+    var i: usize = 3;
+    while (i < ldr.len) : (i += 4) {
+        if (ldr[i] != 255) return true;
+    }
+    return false;
 }
 
 /// Extracts the channels the target format expects from a source mip.
@@ -185,6 +209,13 @@ fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFo
                 std.mem.writeInt(u16, data[i * 6 + 4 ..][0..2], @bitCast(b), .little);
             }
         },
+        .rgb9e5 => {
+            const hdr = src.pixels.hdr;
+            for (0..pixel_count) |i| {
+                const packed_texel = rgb9e5.pack(hdr[i * 3 + 0], hdr[i * 3 + 1], hdr[i * 3 + 2]);
+                std.mem.writeInt(u32, data[i * 4 ..][0..4], packed_texel, .little);
+            }
+        },
         .bc4 => {
             compression.encodeChannels(.bc4, .{
                 .bytes = src.pixels.ldr,
@@ -207,9 +238,10 @@ fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFo
                 .channel_count = 2,
             }, data);
         },
-        .bc7 => {
+        .bc1, .bc3, .bc7 => {
             // Source is already the RGBA8 layout stb_image produced.
-            compression.encode(.bc7, src.pixels.ldr, src.width, src.height, data);
+            std.debug.assert(src.channels == 4);
+            compression.encode(format, src.pixels.ldr, src.width, src.height, data);
         },
         .bc6h => {
             compression.encodeF32(.bc6h, src.pixels.hdr, src.width, src.height, src.channels, data);
@@ -252,24 +284,35 @@ fn makeUniformRawHdr(allocator: std.mem.Allocator, width: u32, height: u32, fill
     };
 }
 
-test "selectFormat: color_srgb picks a supported format" {
-    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc7, selectFormat(.color_srgb));
+test "selectFormat: desktop uses BPTC for color and HDR" {
+    try testing.expectEqual(TexelFormat.bc7, selectFormat(.color_srgb, .desktop, false));
+    try testing.expectEqual(TexelFormat.bc7, selectFormat(.color_srgb, .desktop, true));
+    try testing.expectEqual(TexelFormat.bc7, selectFormat(.packed_linear, .desktop, false));
+    try testing.expectEqual(TexelFormat.bc5, selectFormat(.normal_linear, .desktop, false));
+    try testing.expectEqual(TexelFormat.bc4, selectFormat(.single_linear, .desktop, false));
+    try testing.expectEqual(TexelFormat.bc6h, selectFormat(.hdr_linear, .desktop, false));
 }
 
-test "selectFormat: normal_linear picks a supported format" {
-    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc5, selectFormat(.normal_linear));
+test "selectFormat: gl41 uses S3TC for color, RGTC for normals and masks, RGB9_E5 for HDR" {
+    try testing.expectEqual(TexelFormat.bc1, selectFormat(.color_srgb, .gl41, false));
+    try testing.expectEqual(TexelFormat.bc3, selectFormat(.color_srgb, .gl41, true));
+    try testing.expectEqual(TexelFormat.bc1, selectFormat(.packed_linear, .gl41, false));
+    try testing.expectEqual(TexelFormat.bc3, selectFormat(.packed_linear, .gl41, true));
+    try testing.expectEqual(TexelFormat.bc5, selectFormat(.normal_linear, .gl41, false));
+    try testing.expectEqual(TexelFormat.bc4, selectFormat(.single_linear, .gl41, false));
+    try testing.expectEqual(TexelFormat.rgb9e5, selectFormat(.hdr_linear, .gl41, false));
 }
 
-test "selectFormat: single_linear picks a supported format" {
-    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc4, selectFormat(.single_linear));
-}
-
-test "selectFormat: packed_linear picks a supported format" {
-    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc7, selectFormat(.packed_linear));
-}
-
-test "selectFormat: hdr_linear picks a supported format" {
-    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgb16f else .bc6h, selectFormat(.hdr_linear));
+test "hasAlpha: only 4-channel LDR sources with a non-opaque texel" {
+    var opaque_pixels = [_]u8{ 1, 2, 3, 255, 4, 5, 6, 255 };
+    var translucent_pixels = [_]u8{ 1, 2, 3, 255, 4, 5, 6, 254 };
+    var rgb_pixels = [_]u8{ 1, 2, 3 };
+    const opaque_raw = RawTexture{ .width = 2, .height = 1, .channels = 4, .pixels = .{ .ldr = &opaque_pixels }, .class = .color_srgb };
+    const translucent_raw = RawTexture{ .width = 2, .height = 1, .channels = 4, .pixels = .{ .ldr = &translucent_pixels }, .class = .color_srgb };
+    const rgb_raw = RawTexture{ .width = 1, .height = 1, .channels = 3, .pixels = .{ .ldr = &rgb_pixels }, .class = .normal_linear };
+    try testing.expect(!hasAlpha(&opaque_raw));
+    try testing.expect(hasAlpha(&translucent_raw));
+    try testing.expect(!hasAlpha(&rgb_raw));
 }
 
 test "imageSize: rgba8 4x4 = 64" {
@@ -376,13 +419,13 @@ test "CookedTexture.cook: preserves dimensions and picks color_space" {
     var raw = try makeUniformRaw(alloc, 4, 4, .color_srgb, 128);
     defer raw.deinit(alloc);
 
-    var cooked = try CookedTexture.cook(alloc, &raw);
+    var cooked = try CookedTexture.cook(alloc, &raw, .desktop);
     defer cooked.deinit(alloc);
 
     try testing.expectEqual(@as(u32, 4), cooked.width);
     try testing.expectEqual(@as(u32, 4), cooked.height);
     try testing.expectEqual(ColorSpace.srgb, cooked.color_space);
-    try testing.expectEqual(selectFormat(.color_srgb), cooked.format);
+    try testing.expectEqual(TexelFormat.bc7, cooked.format);
 }
 
 test "CookedTexture.cook: produces full mip chain" {
@@ -390,7 +433,7 @@ test "CookedTexture.cook: produces full mip chain" {
     var raw = try makeUniformRaw(alloc, 4, 4, .single_linear, 100);
     defer raw.deinit(alloc);
 
-    var cooked = try CookedTexture.cook(alloc, &raw);
+    var cooked = try CookedTexture.cook(alloc, &raw, .desktop);
     defer cooked.deinit(alloc);
 
     // log2(4) + 1 = 3 levels: 4x4, 2x2, 1x1
@@ -400,7 +443,7 @@ test "CookedTexture.cook: produces full mip chain" {
     try testing.expectEqual(@as(u32, 1), cooked.mips[2].width);
 }
 
-test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
+test "CookedTexture.cook: normal_linear produces BC5 mips" {
     const alloc = testing.allocator;
     // Pixel (128, 128, 255) → signed normal (0, 0, 1)
     const pixel_count: usize = 4 * 4;
@@ -413,12 +456,11 @@ test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
     var raw = RawTexture{ .width = 4, .height = 4, .channels = 3, .pixels = .{ .ldr = pixels }, .class = .normal_linear, .owner = .allocator };
     defer raw.deinit(alloc);
 
-    var cooked = try CookedTexture.cook(alloc, &raw);
+    var cooked = try CookedTexture.cook(alloc, &raw, .desktop);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(selectFormat(.normal_linear), cooked.format);
+    try testing.expectEqual(TexelFormat.bc5, cooked.format);
     try testing.expectEqual(ColorSpace.linear, cooked.color_space);
-    if (builtin.os.tag == .macos) return;
 
     // Each mip is one BC5 block (2 × 8-byte BC4 halves = 16 bytes) since dims collapse to ≤4x4.
     for (cooked.mips) |mip| {
@@ -433,16 +475,15 @@ test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
     try testing.expectEqual(@as(u8, 128), top.data[9]); // G red1
 }
 
-test "CookedTexture.cook: single_linear produces platform-compatible mips" {
+test "CookedTexture.cook: single_linear produces BC4 mips" {
     const alloc = testing.allocator;
     var raw = try makeUniformRaw(alloc, 4, 4, .single_linear, 77);
     defer raw.deinit(alloc);
 
-    var cooked = try CookedTexture.cook(alloc, &raw);
+    var cooked = try CookedTexture.cook(alloc, &raw, .desktop);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(selectFormat(.single_linear), cooked.format);
-    if (builtin.os.tag == .macos) return;
+    try testing.expectEqual(TexelFormat.bc4, cooked.format);
     // Each mip is one 4x4 block = 8 bytes (sub-4 mips round up).
     for (cooked.mips) |mip| {
         try testing.expectEqual(@as(usize, 8), mip.data.len);
@@ -454,15 +495,13 @@ test "CookedTexture.cook: single_linear produces platform-compatible mips" {
 }
 
 test "CookedTexture.cook: compact single-channel source produces BC4 mips" {
-    if (builtin.os.tag == .macos) return;
-
     const alloc = testing.allocator;
     const pixels = try alloc.alloc(u8, 4 * 4);
     @memset(pixels, 91);
     var raw = RawTexture{ .width = 4, .height = 4, .channels = 1, .pixels = .{ .ldr = pixels }, .class = .single_linear, .owner = .allocator };
     defer raw.deinit(alloc);
 
-    var cooked = try CookedTexture.cook(alloc, &raw);
+    var cooked = try CookedTexture.cook(alloc, &raw, .desktop);
     defer cooked.deinit(alloc);
 
     try testing.expectEqual(TexelFormat.bc4, cooked.format);
@@ -470,4 +509,57 @@ test "CookedTexture.cook: compact single-channel source produces BC4 mips" {
         try testing.expectEqual(@as(u8, 91), mip.data[0]);
         try testing.expectEqual(@as(u8, 91), mip.data[1]);
     }
+}
+
+test "CookedTexture.cook: gl41 picks BC1 for opaque color and BC3 once any texel has alpha" {
+    const alloc = testing.allocator;
+    var raw = try makeUniformRaw(alloc, 8, 8, .color_srgb, 255);
+    defer raw.deinit(alloc);
+
+    var opaque_cooked = try CookedTexture.cook(alloc, &raw, .gl41);
+    defer opaque_cooked.deinit(alloc);
+    try testing.expectEqual(TexelFormat.bc1, opaque_cooked.format);
+    try testing.expectEqual(@as(usize, 4 * 8), opaque_cooked.mips[0].data.len);
+
+    raw.pixels.ldr[7] = 0; // alpha of texel 1
+    var alpha_cooked = try CookedTexture.cook(alloc, &raw, .gl41);
+    defer alpha_cooked.deinit(alloc);
+    try testing.expectEqual(TexelFormat.bc3, alpha_cooked.format);
+    try testing.expectEqual(@as(usize, 4 * 16), alpha_cooked.mips[0].data.len);
+    // Alpha endpoints of the first block span the transparent texel.
+    try testing.expectEqual(@as(u8, 255), alpha_cooked.mips[0].data[0]);
+    try testing.expectEqual(@as(u8, 0), alpha_cooked.mips[0].data[1]);
+}
+
+test "CookedTexture.cook: gl41 packs HDR as RGB9_E5" {
+    const alloc = testing.allocator;
+    var raw = try makeUniformRawHdr(alloc, 2, 2, .{ 4.0, 1.0, 0.25 });
+    defer raw.deinit(alloc);
+
+    var cooked = try CookedTexture.cook(alloc, &raw, .gl41);
+    defer cooked.deinit(alloc);
+
+    try testing.expectEqual(TexelFormat.rgb9e5, cooked.format);
+    try testing.expectEqual(@as(usize, 2 * 2 * 4), cooked.mips[0].data.len);
+    const texel = std.mem.readInt(u32, cooked.mips[0].data[0..4], .little);
+    try testing.expectEqual([3]f32{ 4.0, 1.0, 0.25 }, rgb9e5.unpack(texel));
+}
+
+test "cookMip: rgb9e5 packs each texel little-endian" {
+    const alloc = testing.allocator;
+    var pixels = [_]f32{ 1.0, 0.5, 0.0, 0.0, 0.0, 2.0 };
+    const src = RawTexture{ .width = 2, .height = 1, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
+
+    const mip = try cookMip(alloc, &src, .rgb9e5);
+    defer alloc.free(mip.data);
+
+    try testing.expectEqual(@as(usize, 8), mip.data.len);
+    try testing.expectEqual([3]f32{ 1.0, 0.5, 0.0 }, rgb9e5.unpack(std.mem.readInt(u32, mip.data[0..4], .little)));
+    try testing.expectEqual([3]f32{ 0.0, 0.0, 2.0 }, rgb9e5.unpack(std.mem.readInt(u32, mip.data[4..8], .little)));
+}
+
+test "imageSize: bc1 is 8 bytes and bc3 16 bytes per block; rgb9e5 is 4 bytes per texel" {
+    try testing.expectEqual(@as(usize, 8), TexelFormat.bc1.imageSize(1, 1));
+    try testing.expectEqual(@as(usize, 64), TexelFormat.bc3.imageSize(8, 8));
+    try testing.expectEqual(@as(usize, 60), TexelFormat.rgb9e5.imageSize(3, 5));
 }
