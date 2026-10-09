@@ -63,6 +63,15 @@ pub const TexelFormat = enum(u16) {
     }
 };
 
+/// Shape of a cooked texture. Values match the on-disk ZTex enum.
+pub const TextureType = enum(u8) {
+    texture_2d = 0,
+    /// Six faces stored as array layers, in GL order +X -X +Y -Y +Z -Z.
+    texture_cube = 1,
+    texture_array = 2,
+    texture_3d = 3,
+};
+
 pub const CookedMip = struct {
     width: u32,
     height: u32,
@@ -74,6 +83,13 @@ pub const CookedTexture = struct {
     height: u32,
     format: TexelFormat,
     color_space: ColorSpace,
+    texture_type: TextureType = .texture_2d,
+    /// Depth of mip 0. Only `texture_3d` has more than 1.
+    depth: u32 = 1,
+    /// Layers per mip: 6 for a cube, 1 for 2D and 3D.
+    array_layers: u32 = 1,
+    /// One entry per level, largest first. Each mip's `data` holds every layer
+    /// (and depth slice) back to back.
     mips: []CookedMip,
 
     pub fn deinit(self: *CookedTexture, allocator: std.mem.Allocator) void {

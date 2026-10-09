@@ -216,7 +216,7 @@ that format are recooked.
 
 Source: `.png`, `.jpg`, `.jpeg`, `.hdr`
 
-Pre-mipmapped and block-compressed. Format is auto-selected by texture classification and the target profile. The profile comes from `--profile`, else `"target_profile"` in `fusion.proj`, else the host (`gl41` on macOS, `desktop` elsewhere). Changing it recooks every texture (and, through the dependency graph, the materials and meshes that reference them).
+Pre-mipmapped and block-compressed. Mip data is stored smallest first, so a partial read gets the low mips, and per-mip dimensions are derived from the base size. The header carries `depth` and `array_layers` so cube, array, and 3D textures fit the same format (the cooker currently only produces 2D). Format is auto-selected by texture classification and the target profile. The profile comes from `--profile`, else `"target_profile"` in `fusion.proj`, else the host (`gl41` on macOS, `desktop` elsewhere). Changing it recooks every texture (and, through the dependency graph, the materials and meshes that reference them).
 
 | Usage | `desktop` (GL 4.2+ / Vulkan) | `gl41` (macOS) | Classification |
 |-------|------------------------------|----------------|----------------|
