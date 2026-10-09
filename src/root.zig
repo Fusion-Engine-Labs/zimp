@@ -124,6 +124,10 @@ pub const VariantKey = formats.zshdr.VariantKey;
 pub const CookedShader = assets.cooked.shader.CookedShader;
 pub const Zamat = formats.zamat.Zamat;
 pub const ZamatHeader = formats.zamat.Header;
+/// Hash that cooked materials store in place of uniform, sampler, and
+/// variant names. Runtimes key their uniform tables with it.
+pub const nameHash = @import("shared/wire.zig").nameHash;
+pub const nameHashAppend = @import("shared/wire.zig").nameHashAppend;
 pub const AlphaMode = assets.cooked.material.AlphaMode;
 pub const CullMode = assets.cooked.material.CullMode;
 pub const BlendMode = assets.cooked.material.BlendMode;
@@ -132,12 +136,9 @@ pub const MipFilterMode = assets.cooked.material.MipFilterMode;
 pub const WrapMode = assets.cooked.material.WrapMode;
 pub const SamplerDesc = assets.cooked.material.SamplerDesc;
 pub const RenderState = assets.cooked.material.RenderState;
-pub const TextureSlotIndex = assets.cooked.material.TextureSlotIndex;
-pub const slotNameToIndex = assets.cooked.material.slotNameToIndex;
 pub const TextureSlotEntry = assets.cooked.material.TextureSlotEntry;
 pub const ParamType = assets.cooked.material.ParamType;
 pub const ParamEntry = assets.cooked.material.ParamEntry;
-pub const ParamBuildResult = assets.cooked.material.ParamBuildResult;
 pub const CookedMaterial = assets.cooked.material.CookedMaterial;
 pub const MaterialSource = assets.raw.material.MaterialSource;
 pub const TextureSlot = assets.raw.material.TextureSlot;
@@ -173,12 +174,9 @@ test "public API exposes format and asset construction types" {
     _ = WrapMode;
     _ = SamplerDesc;
     _ = RenderState;
-    _ = TextureSlotIndex;
-    _ = slotNameToIndex;
     _ = TextureSlotEntry;
     _ = ParamType;
     _ = ParamEntry;
-    _ = ParamBuildResult;
     _ = MaterialSource;
     _ = TextureSlot;
     _ = ParamValue;

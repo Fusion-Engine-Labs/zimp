@@ -279,7 +279,7 @@ Preprocessed GLSL per stage with `#include` resolution and variant expansion; st
 
 Source: `.zamat` (TOML text)
 
-Binary material definitions referencing cooked shaders and textures by `AssetId`, with inline parameter blocks packed for shader uniform upload. The material writer derives the ids from the referenced paths and does not need cooked shader or texture outputs, but the dependency graph still records those logical edges so cache invalidation cascades correctly.
+Fixed-layout binary material definitions referencing cooked shaders and textures by `AssetId`: a 64-byte header, then the texture slots (64 B each, sampler state packed into one `u32`), the params (32 B each, value inline), and the required variants, back to back. Uniform, sampler, and variant names are stored only as 64-bit FNV-1a hashes (`zimp.nameHash`), and the runtime looks uniforms up by the same hash. Each table is sorted by hash. The cooker rejects any two distinct shader-visible names whose hashes collide, including the uniforms the runtime looks up by name. The material writer derives the ids from the referenced paths and does not need cooked shader or texture outputs, but the dependency graph still records those logical edges so cache invalidation cascades correctly.
 
 ```toml
 [material]

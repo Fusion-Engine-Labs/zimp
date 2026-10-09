@@ -18,7 +18,8 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("  Blend mode:  {s}", .{@tagName(material.render_state.blend_mode)});
     log.info("  Textures:    {d}", .{material.texture_slots.len});
     log.info("  Params:      {d}", .{material.params.len});
-    log.info("  Variants:    {d}", .{material.requiredVariantCount()});
+    log.info("  Variants:    {d}", .{material.variant_hashes.len});
+    log.info("  Names are stored as 64-bit FNV-1a hashes.", .{});
 
     log.info("", .{});
     log.info("Shaders:", .{});
@@ -27,44 +28,47 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
 
     log.info("", .{});
     log.info("Required Variants:", .{});
-    for (0..material.requiredVariantCount()) |i| {
-        log.info("  {s}", .{material.requiredVariant(i)});
-    }
+    for (material.variant_hashes) |hash| log.info("  0x{x:0>16}", .{hash});
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: <24}  {s}", .{ "index", "slot_hash", "name", "texture" });
-    log.info("  {s}", .{"-" ** 88});
+    log.info("  {s: >5}  {s: >18}  {s: >3}  {s: <36}  {s}", .{ "index", "name_hash", "uv", "texture", "sampler" });
+    log.info("  {s}", .{"-" ** 100});
     for (0..material.texture_slots.len) |i| {
         const entry = material.textureSlot(i);
-        log.info("  {d: >5}  0x{x:0>16}  {s: <24}  {f}", .{
+        const sampler = entry.sampler;
+        log.info("  {d: >5}  0x{x:0>16}  {d: >3}  {f}  {s}/{s}/{s} {s}/{s} aniso {d}", .{
             i,
-            entry.slot_name_hash,
-            entry.sampler_name,
+            entry.name_hash,
+            entry.uv_set,
             entry.texture,
+            @tagName(sampler.min_filter),
+            @tagName(sampler.mag_filter),
+            @tagName(sampler.mip_filter),
+            @tagName(sampler.wrap_s),
+            @tagName(sampler.wrap_t),
+            sampler.max_anisotropy,
         });
     }
 
     log.info("", .{});
     log.info("Params:", .{});
-    log.info("  {s: >5}  {s: <24}  {s: <8}  {s: >8}  {s: >8}  {s}", .{ "index", "name", "type", "offset", "size", "value" });
-    log.info("  {s}", .{"-" ** 78});
-    for (material.params, 0..) |raw, i| {
+    log.info("  {s: >5}  {s: >18}  {s: <6}  {s}", .{ "index", "name_hash", "type", "value" });
+    log.info("  {s}", .{"-" ** 60});
+    for (0..material.params.len) |i| {
         const entry = material.param(i);
         var value_buf: [96]u8 = undefined;
-        log.info("  {d: >5}  {s: <24}  {s: <8}  {d: >8}  {d: >8}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  {s: <6}  {s}", .{
             i,
-            entry.name,
-            @tagName(entry.param_type),
-            raw.data.offset,
-            raw.data.len,
-            formatParamValue(&value_buf, entry),
+            entry.name_hash,
+            @tagName(entry.value),
+            formatParamValue(&value_buf, entry.value),
         });
     }
 
     const texture_table_size: u64 = material.texture_slots.len * @sizeOf(zamat.TextureSlot);
     const param_table_size: u64 = material.params.len * @sizeOf(zamat.Param);
-    const variant_table_size: u64 = material.variant_refs.len * @sizeOf(wire.Span);
+    const variant_table_size: u64 = material.variant_hashes.len * @sizeOf(u64);
 
     log.info("", .{});
     log.info("File Size Summary:", .{});
@@ -72,40 +76,23 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     var texture_buf: [16]u8 = undefined;
     var param_buf: [16]u8 = undefined;
     var variant_buf: [16]u8 = undefined;
-    var data_buf: [16]u8 = undefined;
-    var strings_buf: [16]u8 = undefined;
     var total_buf: [16]u8 = undefined;
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
     log.info("  Variant table:  {s: >10}", .{fmt.formatBytes(&variant_buf, variant_table_size)});
-    log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, material.param_data.len)});
-    log.info("  Strings:        {s: >10}", .{fmt.formatBytes(&strings_buf, material.strings.len)});
     log.info("  Total:          {s: >10}", .{fmt.formatBytes(&total_buf, bytes.len)});
 }
 
-fn formatParamValue(buf: []u8, entry: zamat.ParamView) []const u8 {
-    const bytes = entry.data;
-    const expected_size: usize = switch (entry.param_type) {
-        .float, .int, .bool => 4,
-        .vec2 => 8,
-        .vec3 => 12,
-        .vec4 => 16,
-    };
-    if (bytes.len < expected_size) return "(invalid size)";
-
-    return switch (entry.param_type) {
-        .float => std.fmt.bufPrint(buf, "{d}", .{readF32(bytes[0..4])}) catch "(format error)",
-        .vec2 => std.fmt.bufPrint(buf, "[{d}, {d}]", .{ readF32(bytes[0..4]), readF32(bytes[4..8]) }) catch "(format error)",
-        .vec3 => std.fmt.bufPrint(buf, "[{d}, {d}, {d}]", .{ readF32(bytes[0..4]), readF32(bytes[4..8]), readF32(bytes[8..12]) }) catch "(format error)",
-        .vec4 => std.fmt.bufPrint(buf, "[{d}, {d}, {d}, {d}]", .{ readF32(bytes[0..4]), readF32(bytes[4..8]), readF32(bytes[8..12]), readF32(bytes[12..16]) }) catch "(format error)",
-        .int => std.fmt.bufPrint(buf, "{d}", .{std.mem.readInt(i32, bytes[0..4], .little)}) catch "(format error)",
-        .bool => std.fmt.bufPrint(buf, "{s}", .{if (std.mem.readInt(u32, bytes[0..4], .little) != 0) "true" else "false"}) catch "(format error)",
-    };
-}
-
-fn readF32(bytes: *const [4]u8) f32 {
-    return @bitCast(std.mem.readInt(u32, bytes, .little));
+fn formatParamValue(buf: []u8, value: zamat.ParamValue) []const u8 {
+    return switch (value) {
+        .float => |v| std.fmt.bufPrint(buf, "{d}", .{v}),
+        .vec2 => |v| std.fmt.bufPrint(buf, "[{d}, {d}]", .{ v[0], v[1] }),
+        .vec3 => |v| std.fmt.bufPrint(buf, "[{d}, {d}, {d}]", .{ v[0], v[1], v[2] }),
+        .vec4 => |v| std.fmt.bufPrint(buf, "[{d}, {d}, {d}, {d}]", .{ v[0], v[1], v[2], v[3] }),
+        .int => |v| std.fmt.bufPrint(buf, "{d}", .{v}),
+        .bool => |v| std.fmt.bufPrint(buf, "{}", .{v}),
+    } catch "(format error)";
 }
 
 pub fn inspector() FormatInspector {

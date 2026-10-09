@@ -142,6 +142,18 @@ pub const ZShader = struct {
         return key;
     }
 
+    /// Key enabling every variant of this stage whose `wire.nameHash` is in
+    /// `sorted_hashes` (a material's `variant_hashes`). Hashes this stage does
+    /// not declare are ignored, since they may belong to the other stage.
+    pub fn variantKeyFromHashes(self: *const ZShader, sorted_hashes: []const u64) VariantKey {
+        var key = VariantKey.base;
+        for (0..self.variantCount()) |i| {
+            const hash = wire.nameHash(self.variantName(i));
+            if (std.sort.binarySearch(u64, sorted_hashes, hash, orderU64) != null) key = key.with(i);
+        }
+        return key;
+    }
+
     fn variantIndex(self: *const ZShader, name: []const u8) ?usize {
         for (0..self.variantCount()) |i| {
             if (std.mem.eql(u8, self.variantName(i), name)) return i;
@@ -149,6 +161,10 @@ pub const ZShader = struct {
         return null;
     }
 };
+
+fn orderU64(target: u64, item: u64) std.math.Order {
+    return std.math.order(target, item);
+}
 
 fn nextString(strings: []const u8, ref: wire.Span, cursor: *u64) !void {
     try wire.checkString(strings, ref);
@@ -277,6 +293,11 @@ test "ZShader write and view round trips" {
     try expectSource(&shader, .fromBits(3), "#version 330 core\n#define SKINNED\n#define HAS_AO\n\nvoid main(){}\n");
     try testing.expectEqual(VariantKey.fromBits(3), try shader.variantKey(&.{ "HAS_AO", "SKINNED" }));
     try testing.expectError(error.UnknownShaderVariant, shader.variantKey(&.{"MISSING"}));
+
+    var hashes = [_]u64{ wire.nameHash("HAS_AO"), wire.nameHash("OTHER_STAGE") };
+    std.mem.sort(u64, &hashes, {}, std.sort.asc(u64));
+    try testing.expectEqual(VariantKey.fromBits(2), shader.variantKeyFromHashes(&hashes));
+    try testing.expectEqual(VariantKey.base, shader.variantKeyFromHashes(&.{}));
 
     var parts: ZShader.SourceParts = undefined;
     try testing.expectError(error.InvalidVariantKey, shader.sourceParts(.fromBits(4), &parts));
