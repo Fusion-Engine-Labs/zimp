@@ -962,9 +962,9 @@ test "decode rejects hostile tables" {
                 t.components[1].type_index = 4;
             }
         }.f },
+        // Point Override's (aaaa, 3) at (aaaa, 1).
         .{ .expected = error.UnusedComponentType, .patch = struct {
             fn f(t: TestTables) void {
-                // Point Override's (aaaa, 3) at (aaaa, 1).
                 t.components[t.components.len - 1].type_index = 0;
             }
         }.f },
