@@ -88,6 +88,19 @@ pub fn build(b: *std.Build) void {
         perf_cmd.addArgs(args);
     }
     perf_step.dependOn(&perf_cmd.step);
+
+    const docs_lib = b.addLibrary(.{
+        .name = "zimp",
+        .root_module = mod,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs_lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+
+    const docs_step = b.step("docs", "Generate documentation");
+    docs_step.dependOn(&install_docs.step);
 }
 
 /// Vendored zstd (external/zstd): the pack writer compresses with it and
