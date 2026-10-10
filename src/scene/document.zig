@@ -8,6 +8,7 @@ const Uuid = @import("../id/uuid.zig").Uuid;
 const validate = @import("validate.zig");
 const path = @import("../path.zig");
 const value = @import("value.zig");
+const wire = @import("../shared/wire.zig");
 
 pub const Format = enum {
     json,
@@ -57,16 +58,22 @@ pub const SceneDocument = struct {
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, name: []const u8, options: validate.Options) !SceneDocument {
         try path.validateVirtual(name);
-        const bytes = try dir.readFileAlloc(
+        // Aligned so binary scenes can be viewed in place.
+        const bytes = try dir.readFileAllocOptions(
             io,
             name,
             allocator,
             .limited(json_codec.max_scene_bytes),
+            wire.alignment,
+            null,
         );
         defer allocator.free(bytes);
 
         if (std.mem.startsWith(u8, bytes, binary_codec.magic)) {
-            return try binary_codec.decode(allocator, bytes);
+            var scene = try binary_codec.decode(allocator, bytes);
+            errdefer scene.deinit();
+            try validate.validateLimits(&scene, options);
+            return scene;
         }
 
         var scene = try json_codec.decode(allocator, bytes);
@@ -89,13 +96,19 @@ pub const SceneDocument = struct {
             .{ .expected_project_id = options.project_id },
         );
 
-        const bytes = switch (options.format) {
-            .json => try json_codec.encodeAlloc(allocator, self),
-            .binary => try binary_codec.encodeAlloc(allocator, self),
-        };
-        defer allocator.free(bytes);
-
-        try atomic_file.writeFileAtomic(allocator, io, dir, file, bytes);
+        // The buffers differ in alignment, so each is freed as allocated.
+        switch (options.format) {
+            .json => {
+                const bytes = try json_codec.encodeAlloc(allocator, self);
+                defer allocator.free(bytes);
+                try atomic_file.writeFileAtomic(allocator, io, dir, file, bytes);
+            },
+            .binary => {
+                const bytes = try binary_codec.encodeAlloc(allocator, self);
+                defer allocator.free(bytes);
+                try atomic_file.writeFileAtomic(allocator, io, dir, file, bytes);
+            },
+        }
     }
 
     pub fn entityIndex(self: *const SceneDocument, id: id_types.SceneEntityId) ?usize {
@@ -302,6 +315,25 @@ test "SceneDocument.write round trips JSON and binary scenes" {
         try testing.expect(loaded.project_id.eql(project_id));
         try testing.expectEqualStrings(scene.name, loaded.name);
     }
+}
+
+test "SceneDocument.load checks the project of a binary scene" {
+    const scene_id = id_types.SceneId.parseComptime("8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a");
+    const project_id = id_types.ProjectId.parseComptime("4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589");
+    const other_project_id = id_types.ProjectId.parseComptime("d9b8e01a-f070-4cd7-bc83-19f8a6e40d17");
+    var scene = try SceneDocument.init(testing.allocator, scene_id, project_id, "scene");
+    defer scene.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try scene.write(testing.allocator, testing.io, tmp.dir, "scene.zscn", .{
+        .project_id = project_id,
+        .format = .binary,
+    });
+
+    try testing.expectError(error.UnexpectedProjectId, SceneDocument.load(testing.allocator, testing.io, tmp.dir, "scene.zscn", .{
+        .expected_project_id = other_project_id,
+    }));
 }
 
 test "SceneDocument.write rejects a mismatched project" {

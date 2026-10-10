@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples", type=int, default=30, help="Independent deterministic samples per scenario (default: 30).")
     parser.add_argument("--instances", type=int, default=256, help="Nodes that reference one mesh in the repeated-instance glTF fixture.")
     parser.add_argument("--metadata-assets", type=int, default=384, help="Dependency-only files used for file-count scaling.")
-    parser.add_argument("--scene-entities", type=int, default=5000, help="Entities in the generated large-scene JSON fixture.")
+    parser.add_argument("--scene-entities", type=int, default=5000, help="Entities in the generated large-scene JSON fixture and in the scene load bench.")
     parser.add_argument("--keep-fixtures", action="store_true", help="Keep per-sample source/output trees instead of removing them after measurement.")
     parser.add_argument("--optimize", default="ReleaseFast", help="Build optimization mode recorded in result metadata.")
     return parser.parse_args()
@@ -373,6 +373,64 @@ def write_large_scene_fixture(scene_dir: Path, entities: int) -> None:
     (scene_dir / "large_scene.json").write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
 
 
+def write_bench_scene(path: Path, entities: int) -> None:
+    """A `fusion.scene` document for the scene load bench (JSON vs cooked binary).
+
+    It lives outside the cook source, so cook measurements are unaffected.
+    Every entity has a transform; most also reference meshes and materials,
+    and some carry entity references, string tags, and prefab links. Parents
+    form an 8-ary tree.
+    """
+
+    def entity_id(index: int) -> str:
+        return f"{index + 1:08x}-0000-4000-8000-{index + 1:012x}"
+
+    def asset_id(number: int) -> str:
+        return f"{number:08x}-1111-4111-8111-{number:012x}"
+
+    def field(number: int, kind: str, value: Any) -> dict[str, Any]:
+        return {"number": number, "value": {"kind": kind, "value": value}}
+
+    transform = "7fb84f38-52b6-4fd9-8c2f-fbd08c7a9001"
+    mesh_render = "7fb84f38-52b6-4fd9-8c2f-fbd08c7a9002"
+    reference = "e7332d7d-e00c-44d4-8f1e-d5b992ab6ee9"
+    tag = "b2eb84d4-117b-4867-8c5b-133a20c80a90"
+    items = []
+    for index in range(entities):
+        components = [
+            {
+                "type_id": transform,
+                "version": 1,
+                "fields": [
+                    field(1, "vec3", [float(index % 97), float(index % 31), float(index % 13) * 0.5]),
+                    field(2, "quat", [0.0, 0.0, 0.0, 1.0]),
+                    field(3, "vec3", [1.0, 1.0, 1.0]),
+                ],
+            }
+        ]
+        if index % 4 != 3:
+            components.append({"type_id": mesh_render, "version": 1, "fields": [field(1, "asset_ref", asset_id(1 + index % 16)), field(2, "asset_ref", asset_id(100 + index % 8))]})
+        if index % 4 == 0:
+            components.append({"type_id": reference, "version": 1, "fields": [field(1, "entity_ref", entity_id((index * 17) % entities))]})
+        if index % 8 == 0:
+            components.append({"type_id": tag, "version": 1, "fields": [field(1, "string", "even" if index % 16 == 0 else "odd")]})
+        item: dict[str, Any] = {"id": entity_id(index), "name": f"entity_{index:06d}", "components": components}
+        if index >= 8:
+            item["parent_id"] = entity_id(index // 8 - 1)
+        if index % 50 == 0 and index:
+            item["prefab"] = {"prefab_asset": asset_id(500), "source_entity": entity_id(index - 1)}
+        items.append(item)
+    document = {
+        "format": "fusion.scene",
+        "version": 2,
+        "scene_id": "8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a",
+        "project_id": "4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589",
+        "name": "Bench",
+        "entities": items,
+    }
+    path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+
+
 def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials: int, include_depth: int, instances: int, metadata_assets: int, scene_entities: int) -> dict[str, int]:
     textures = source / "textures"
     shaders = source / "shaders"
@@ -563,6 +621,8 @@ def print_results(scenarios: dict[str, dict[str, Any]]) -> None:
         for source, kinds in load["aggregate"].items():
             if source == "loose":
                 print("\nLOAD loose (runtime.loadFromFile over the cold output, warm page cache)")
+            elif source == "scene":
+                print("\nLOAD scene (SceneDocument.load of the bench scene, JSON vs cooked binary, warm page cache)")
             else:
                 print(f"\nLOAD {source} (runtime.PackStore.load, fresh mapping per pass, warm page cache)")
                 if "open" in kinds:
@@ -669,9 +729,9 @@ def run_packs(zimp: Path, output: Path, pack_dir: Path) -> dict[str, Any] | None
     return result
 
 
-def run_load_bench(load_bench: Path, output: Path, packs: list[Path]) -> dict[str, Any]:
-    """Load every cooked asset from loose files and from each pack; see load_bench.zig."""
-    process = subprocess.run([str(load_bench), str(output), *map(str, packs)], text=True, capture_output=True, check=False)
+def run_load_bench(load_bench: Path, output: Path, packs: list[Path], scene: Path) -> dict[str, Any]:
+    """Load every cooked asset from loose files and from each pack, and the bench scene; see load_bench.zig."""
+    process = subprocess.run([str(load_bench), str(output), "--scene", str(scene), *map(str, packs)], text=True, capture_output=True, check=False)
     if process.returncode != 0:
         print(process.stdout + "\n" + process.stderr, file=sys.stderr)
         raise RuntimeError(f"load bench returned {process.returncode}")
@@ -749,6 +809,9 @@ def main() -> int:
         args.metadata_assets,
         args.scene_entities,
     )
+    bench_scene = work_dir / "bench" / "bench.scene.json"
+    bench_scene.parent.mkdir()
+    write_bench_scene(bench_scene, args.scene_entities)
     print("zimp performance stress suite")
     print("=" * 29)
     print(f"Work directory: {work_dir}; samples per scenario: {args.samples}")
@@ -767,7 +830,7 @@ def main() -> int:
             samples_by_scenario.setdefault("pack", []).append(packs)
         if load_bench is not None:
             pack_paths = [sample_root / f"{name}.zpak" for name in PACK_VARIANTS] if packs is not None else []
-            samples_by_scenario.setdefault("load", []).append(run_load_bench(load_bench, output, pack_paths))
+            samples_by_scenario.setdefault("load", []).append(run_load_bench(load_bench, output, pack_paths, bench_scene))
         samples_by_scenario["warm_noop"].append(run_scenario("warm_noop", source, output, zimp))
         samples_by_scenario["one_file_invalidation"].append(
             run_scenario("one_file_invalidation", source, output, zimp)
