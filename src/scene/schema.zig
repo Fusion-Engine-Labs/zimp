@@ -6,6 +6,9 @@ const AssetKind = @import("../assets/asset.zig").AssetKind;
 const ComponentTypeId = id_types.ComponentTypeId;
 const Value = @import("value.zig").Value;
 
+/// Cooked scenes store field numbers as u16.
+pub const max_field_number: u32 = std.math.maxInt(u16);
+
 pub const EnumSchema = struct {
     name: []const u8,
     entries: []const struct { name: []const u8, value: u32 },
@@ -95,7 +98,7 @@ pub fn validateSchema(schema: ComponentSchema) SchemaError!void {
     }
 
     for (schema.fields, 0..) |field, i| {
-        if (field.number == 0) {
+        if (field.number == 0 or field.number > max_field_number) {
             return error.InvalidFieldNumber;
         }
         if (field.name.len == 0) {
@@ -185,6 +188,9 @@ test "validateSchema rejects invalid field number and name" {
         .default_value = .{ .bool = true },
         .editor = .{},
     }};
+    try testing.expectError(error.InvalidFieldNumber, validateSchema(validSchema(&fields)));
+
+    fields[0].number = max_field_number + 1;
     try testing.expectError(error.InvalidFieldNumber, validateSchema(validSchema(&fields)));
 
     fields[0].number = 1;

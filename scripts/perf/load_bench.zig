@@ -1,6 +1,6 @@
 //! Measures how fast cooked assets load, from loose files and from packs.
 //!
-//! Usage: zimp-load-bench <cooked_dir> [<pack.zpak>...]
+//! Usage: zimp-load-bench <cooked_dir> [--scene <scene.json>] [<pack.zpak>...]
 //!
 //! Prints one JSON object per (source, asset kind). Each pass loads and frees
 //! every asset of that kind once; the page cache is warmed first, so results
@@ -16,6 +16,11 @@
 //! "open". Pack support is feature-detected with `@hasDecl`, and loose loads
 //! only use `loadFromFile`, `detectKind`, and `Asset.deinit`, so the same
 //! source builds against older zimp revisions for before/after comparisons.
+//!
+//! With `--scene`, the scene is written next to itself as `bench.json` and
+//! `bench.zscn` through `SceneDocument.write`, and each is timed through
+//! `SceneDocument.load` (source "scene", kinds "json" and "binary"). Those
+//! two calls kept their signatures across scene format versions.
 
 const std = @import("std");
 const zimp = @import("zimp");
@@ -39,8 +44,14 @@ pub fn main(init: std.process.Init) !void {
 
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) {
-        std.debug.print("usage: {s} <cooked_dir> [<pack.zpak>...]\n", .{args[0]});
+        std.debug.print("usage: {s} <cooked_dir> [--scene <scene.json>] [<pack.zpak>...]\n", .{args[0]});
         return error.InvalidArguments;
+    }
+    var scene_path: ?[]const u8 = null;
+    var pack_args = args[2..];
+    if (pack_args.len >= 2 and std.mem.eql(u8, pack_args[0], "--scene")) {
+        scene_path = pack_args[1];
+        pack_args = pack_args[2..];
     }
 
     var dir = try std.Io.Dir.cwd().openDir(io, args[1], .{ .iterate = true });
@@ -76,14 +87,50 @@ pub fn main(init: std.process.Init) !void {
         try timer.print(out, "loose", @tagName(kind), files.paths.items.len, files.bytes, files.bytes);
     }
 
-    for (args[2..]) |pack_path| {
+    for (pack_args) |pack_path| {
         if (comptime @hasDecl(runtime, "PackStore")) {
             try benchPack(gpa, arena, io, out, pack_path, &pass_ns);
         } else {
             return error.PacksUnsupported;
         }
     }
+    if (scene_path) |path| try benchScene(gpa, arena, io, out, path, &pass_ns);
     try out.flush();
+}
+
+fn benchScene(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, scene_path: []const u8, pass_ns: *std.ArrayList(u64)) !void {
+    const cwd = std.Io.Dir.cwd();
+    var dir = try cwd.openDir(io, std.fs.path.dirname(scene_path) orelse ".", .{});
+    defer dir.close(io);
+
+    const json = try cwd.readFileAlloc(io, scene_path, arena, .unlimited);
+    var source = try zimp.scene.json_codec.decode(gpa, json);
+    defer source.deinit();
+
+    const Variant = struct { kind: []const u8, file: []const u8, format: zimp.scene.document.Format };
+    const variants = [_]Variant{
+        .{ .kind = "json", .file = "bench.json", .format = .json },
+        .{ .kind = "binary", .file = "bench.zscn", .format = .binary },
+    };
+    for (variants) |variant| {
+        try source.write(gpa, io, dir, variant.file, .{ .project_id = source.project_id, .format = variant.format });
+        const bytes = (try dir.statFile(io, variant.file, .{})).size;
+        try loadScene(gpa, io, dir, variant.file, source.project_id); // warm the page cache
+
+        var timer: Passes = .{ .samples = pass_ns };
+        while (timer.more()) {
+            const start = std.Io.Timestamp.now(io, .awake);
+            try loadScene(gpa, io, dir, variant.file, source.project_id);
+            try timer.record(arena, start.untilNow(io, .awake));
+        }
+        try timer.print(out, "scene", variant.kind, 1, bytes, bytes);
+    }
+}
+
+fn loadScene(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8, project_id: zimp.ProjectId) !void {
+    var scene = try zimp.scene.SceneDocument.load(gpa, io, dir, file, .{ .expected_project_id = project_id });
+    defer scene.deinit();
+    std.mem.doNotOptimizeAway(&scene);
 }
 
 const Passes = struct {

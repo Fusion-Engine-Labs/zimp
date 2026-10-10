@@ -5,6 +5,8 @@ const document_mod = @import("document.zig");
 const json_codec = @import("json_codec.zig");
 const value_mod = @import("value.zig");
 
+const max_field_number = @import("schema.zig").max_field_number;
+
 const SceneComponent = document_mod.SceneComponent;
 const SceneDocument = document_mod.SceneDocument;
 const SceneEntity = document_mod.SceneEntity;
@@ -20,7 +22,7 @@ pub const Options = struct {
 };
 
 pub fn validate(scene: *const SceneDocument, allocator: std.mem.Allocator, options: Options) !void {
-    try validateHeader(scene, options);
+    try validateLimits(scene, options);
 
     var ids = std.AutoHashMap(SceneEntityId, usize).init(allocator);
     defer ids.deinit();
@@ -36,9 +38,28 @@ pub fn validate(scene: *const SceneDocument, allocator: std.mem.Allocator, optio
         }
 
         ids.getPtr(entity.id).?.* = index;
-        try validateEntityShape(entity, options);
+        try validateEntityShape(entity);
     }
     try validateReferencesAndCycles(scene, &ids, allocator);
+}
+
+/// The header checks and size limits of `validate`, without the structural
+/// checks. `binary_codec.decode` already enforces those (unique ids,
+/// resolvable references, no cycles, no duplicate components or fields), so
+/// binary scenes only need this.
+pub fn validateLimits(scene: *const SceneDocument, options: Options) !void {
+    try validateHeader(scene, options);
+    for (scene.entities) |entity| {
+        try validateName(entity.name, options);
+        if (entity.components.len > options.max_components_per_entity) {
+            return error.TooManyComponents;
+        }
+        for (entity.components) |component| {
+            if (component.fields.len > options.max_fields_per_component) {
+                return error.TooManyFields;
+            }
+        }
+    }
 }
 
 fn validateHeader(scene: *const SceneDocument, options: Options) !void {
@@ -70,12 +91,7 @@ fn validateHeader(scene: *const SceneDocument, options: Options) !void {
     try validateName(scene.name, options);
 }
 
-fn validateEntityShape(entity: SceneEntity, options: Options) !void {
-    try validateName(entity.name, options);
-    if (entity.components.len > options.max_components_per_entity) {
-        return error.TooManyComponents;
-    }
-
+fn validateEntityShape(entity: SceneEntity) !void {
     for (entity.components, 0..) |component, component_index| {
         if (component.type_id.isZero()) {
             return error.ZeroComponentTypeId;
@@ -83,10 +99,6 @@ fn validateEntityShape(entity: SceneEntity, options: Options) !void {
 
         if (component.version == 0) {
             return error.ZeroComponentVersion;
-        }
-
-        if (component.fields.len > options.max_fields_per_component) {
-            return error.TooManyFields;
         }
 
         for (entity.components[0..component_index]) |previous| {
@@ -108,6 +120,10 @@ fn validateFields(component: SceneComponent) !void {
     for (component.fields, 0..) |field, field_index| {
         if (field.number == 0) {
             return error.ZeroFieldNumber;
+        }
+
+        if (field.number > max_field_number) {
+            return error.FieldNumberTooLarge;
         }
 
         if (field.value == .none) {
@@ -229,6 +245,26 @@ test "document validates structure without requiring schemas or assets" {
     scene.entities[0].components[0].version = 99;
     scene.entities[0].components[0].fields[0].number = 999;
     try validate(&scene, testing.allocator, .{});
+}
+
+test "document rejects field numbers that do not fit a cooked scene" {
+    var scene = try validScene(testing.allocator);
+    defer scene.deinit();
+    scene.entities[0].components[0].fields[0].number = max_field_number;
+    try validate(&scene, testing.allocator, .{});
+    scene.entities[0].components[0].fields[0].number = max_field_number + 1;
+    try testing.expectError(error.FieldNumberTooLarge, validate(&scene, testing.allocator, .{}));
+}
+
+test "validateLimits checks the header and size limits only" {
+    var scene = try validScene(testing.allocator);
+    defer scene.deinit();
+    scene.entities[0].parent_id = entity_b; // structural, so not checked here
+    try validateLimits(&scene, .{ .expected_project_id = project_id });
+    try testing.expectError(error.UnexpectedProjectId, validateLimits(&scene, .{ .expected_project_id = .parseComptime("d9b8e01a-f070-4cd7-bc83-19f8a6e40d17") }));
+    try testing.expectError(error.TooManyFields, validateLimits(&scene, .{ .max_fields_per_component = 0 }));
+    try testing.expectError(error.TooManyComponents, validateLimits(&scene, .{ .max_components_per_entity = 0 }));
+    try testing.expectError(error.NameTooLong, validateLimits(&scene, .{ .max_name_bytes = 1 }));
 }
 
 test "document rejects bad ids, references, and cycles" {
