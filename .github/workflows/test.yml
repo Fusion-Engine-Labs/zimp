@@ -87,7 +87,14 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: [native, x86_64-windows]
+                target:
+                    [
+                        native,
+                        x86_64-windows,
+                        x86_64-macos,
+                        aarch64-macos,
+                        aarch64-linux,
+                    ]
 
         steps:
             - name: Checkout code
