@@ -264,8 +264,8 @@ test "CookCommand.parseFromArgs succeeds with valid args" {
     const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
-    try testing.expect(cmd.source.handle != 0);
-    try testing.expect(cmd.output.handle != 0);
+    try testing.expect((try cmd.source.stat(testing.io)).kind == .directory);
+    try testing.expect((try cmd.output.stat(testing.io)).kind == .directory);
 }
 
 test "CookCommand.parseFromArgs succeeds with force arg" {
@@ -274,8 +274,8 @@ test "CookCommand.parseFromArgs succeeds with force arg" {
     defer cmd.deinit();
 
     try testing.expect(cmd.force == true);
-    try testing.expect(cmd.source.handle != 0);
-    try testing.expect(cmd.output.handle != 0);
+    try testing.expect((try cmd.source.stat(testing.io)).kind == .directory);
+    try testing.expect((try cmd.output.stat(testing.io)).kind == .directory);
 }
 
 test "CookCommand.parseFromArgs accepts flags in any order" {
@@ -284,8 +284,8 @@ test "CookCommand.parseFromArgs accepts flags in any order" {
     defer cmd.deinit();
 
     try testing.expect(cmd.force == false);
-    try testing.expect(cmd.source.handle != 0);
-    try testing.expect(cmd.output.handle != 0);
+    try testing.expect((try cmd.source.stat(testing.io)).kind == .directory);
+    try testing.expect((try cmd.output.stat(testing.io)).kind == .directory);
 }
 
 test "CookCommand.parseFromArgs rejects unknown flags even when argument count is sufficient" {

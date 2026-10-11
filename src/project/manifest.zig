@@ -44,6 +44,9 @@ pub const ProjectManifest = struct {
     /// Where `zimp pack --project` writes the pack and the runtime reads it.
     asset_pack: []const u8 = DEFAULT_ASSET_PACK,
     default_scene: ?[]const u8 = null,
+    /// Shared library holding the project's game code, relative to the
+    /// project root. Null for projects without game code.
+    game_library: ?[]const u8 = null,
     /// Graphics profile to cook for. Null cooks for the host
     /// (`TargetProfile.host()`); `zimp cook --profile` overrides both.
     target_profile: ?TargetProfile = null,
@@ -100,6 +103,7 @@ pub const ProjectManifest = struct {
         try path.validateVirtual(self.asset_manifest);
         try path.validateVirtual(self.asset_pack);
         if (self.default_scene) |scene| try path.validateVirtual(scene);
+        if (self.game_library) |library| try path.validateVirtual(library);
     }
 
     pub fn assetsPath(self: *const ProjectManifest) []const u8 {
@@ -137,6 +141,8 @@ pub const ProjectManifest = struct {
         errdefer allocator.free(asset_pack);
         const default_scene = if (self.default_scene) |value| try allocator.dupe(u8, value) else null;
         errdefer if (default_scene) |value| allocator.free(value);
+        const game_library = if (self.game_library) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (game_library) |value| allocator.free(value);
 
         return .{
             .format = format,
@@ -150,6 +156,7 @@ pub const ProjectManifest = struct {
             .asset_manifest = asset_manifest,
             .asset_pack = asset_pack,
             .default_scene = default_scene,
+            .game_library = game_library,
             .target_profile = self.target_profile,
         };
     }
@@ -164,6 +171,7 @@ pub const ProjectManifest = struct {
         allocator.free(self.asset_manifest);
         allocator.free(self.asset_pack);
         if (self.default_scene) |value| allocator.free(value);
+        if (self.game_library) |value| allocator.free(value);
         self.* = undefined;
     }
 
@@ -238,6 +246,7 @@ test "ProjectManifest round-trips through save and loadFromDir" {
     const manifest: ProjectManifest = .{
         .project_id = test_project_id,
         .asset_manifest = ".fusion/custom.zmanifest",
+        .game_library = "zig-out/lib/libgame.so",
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
@@ -245,6 +254,7 @@ test "ProjectManifest round-trips through save and loadFromDir" {
     defer loaded.deinit(testing.allocator);
     try testing.expect(loaded.project_id.eql(test_project_id));
     try testing.expectEqualStrings(".fusion/custom.zmanifest", loaded.asset_manifest);
+    try testing.expectEqualStrings("zig-out/lib/libgame.so", loaded.game_library.?);
 }
 
 test "ProjectManifest.loadFromDir rejects invalid manifests" {
@@ -269,6 +279,7 @@ test "ProjectManifest defaults asset_pack when an older fusion.proj omits it" {
     , .{});
     defer parsed.deinit();
     try testing.expectEqualStrings(".fusion/assets.zpak", parsed.value.asset_pack);
+    try testing.expect(parsed.value.game_library == null);
 }
 
 test "ProjectManifest parses project_id from canonical UUID text" {
@@ -313,6 +324,10 @@ test "ProjectManifest.validate rejects bad identity and paths" {
     m = valid;
     m.asset_pack = "/abs/assets.zpak";
     try testing.expectError(error.AbsolutePathNotAllowed, m.validate());
+
+    m = valid;
+    m.game_library = "../game/libgame.so";
+    try testing.expectError(error.ParentTraversalNotAllowed, m.validate());
 }
 
 test "ProjectManifest cloneOwned owns all string fields" {
@@ -326,6 +341,7 @@ test "ProjectManifest cloneOwned owns all string fields" {
         .asset_manifest = ".cache/assets.zmanifest",
         .asset_pack = "build/game.zpak",
         .default_scene = "game-scenes/main.scene",
+        .game_library = "zig-out/lib/libgame.so",
     };
     var owned = try source.cloneOwned(testing.allocator);
     defer owned.deinit(testing.allocator);
@@ -333,6 +349,7 @@ test "ProjectManifest cloneOwned owns all string fields" {
 
     try testing.expectEqualStrings("fusion.proj", owned.format);
     try testing.expectEqualStrings("game-scenes/main.scene", owned.default_scene.?);
+    try testing.expectEqualStrings("zig-out/lib/libgame.so", owned.game_library.?);
     try testing.expectEqualStrings(".cache/assets.zmanifest", owned.asset_manifest);
 }
 
