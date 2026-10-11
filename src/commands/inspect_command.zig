@@ -95,7 +95,7 @@ test "InspectCommand.parseFromArgs succeeds with valid file" {
     const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
-    try testing.expect(cmd.file.handle != 0);
+    try testing.expect((try cmd.file.stat(testing.io)).kind == .file);
 }
 
 test "InspectCommand.parseFromArgs stores allocator" {

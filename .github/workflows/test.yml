@@ -1,41 +1,115 @@
 name: Zig
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 permissions:
-  contents: read
-  actions: read
+    contents: read
+    actions: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container: jackpar/zig:0.16.0
+    fmt:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
 
-      - name: Build project for release
-        run: zig build -Doptimize=ReleaseFast
+            - name: Setup Zig
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.16.0
+                  cache-key: fmt
 
-  test:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    container: jackpar/zig:0.16.0
+            - name: Check formatting
+              run: zig fmt --check .
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+    test:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
+        strategy:
+            fail-fast: false
+            matrix:
+                optimize: [Debug, ReleaseSafe, ReleaseFast, ReleaseSmall]
 
-      - name: Test project
-        run: zig build test --summary all
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
 
-      - name: Check formatting
-        run: zig fmt --check build.zig src examples/build.zig examples/src/main.zig
+            - name: Setup Zig
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.16.0
+                  cache-key: test-${{ matrix.optimize }}
 
-      - name: Build consumer example
-        working-directory: examples
-        run: zig build
+            # check covers the CLI, the load bench and the test binary
+            - name: Compile everything (${{ matrix.optimize }})
+              run: zig build check -Doptimize=${{ matrix.optimize }} --summary all
+
+            - name: Test project (${{ matrix.optimize }})
+              run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+
+    cross-compile:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
+        strategy:
+            fail-fast: false
+            matrix:
+                target:
+                    [
+                        x86_64-windows,
+                        x86_64-macos,
+                        aarch64-macos,
+                        aarch64-linux,
+                        x86_64-linux-musl,
+                    ]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
+
+            - name: Setup Zig
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.16.0
+                  cache-key: cross-${{ matrix.target }}
+
+            - name: Compile for ${{ matrix.target }}
+              run: zig build check -Dtarget=${{ matrix.target }} --summary all
+
+    examples:
+        runs-on: blacksmith-4vcpu-ubuntu-2404
+        strategy:
+            fail-fast: false
+            matrix:
+                target: [native, x86_64-windows]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v6
+
+            - name: Setup Zig
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.16.0
+                  cache-key: examples-${{ matrix.target }}
+
+            - name: Build consumer example for ${{ matrix.target }}
+              working-directory: examples
+              run: zig build -Dtarget=${{ matrix.target }} --summary all
+
+            # Cooking runs the zimp CLI on the host, so it only makes sense natively
+            - name: Cook example assets
+              if: matrix.target == 'native'
+              working-directory: examples
+              run: zig build cook --summary all
+
+            - name: Run consumer example
+              if: matrix.target == 'native'
+              working-directory: examples
+              run: zig build run

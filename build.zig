@@ -79,6 +79,11 @@ pub fn build(b: *std.Build) void {
     });
     const install_load_bench = b.addInstallArtifact(load_bench, .{});
 
+    const check_step = b.step("check", "Compile all code without running tests");
+    check_step.dependOn(&mod_tests.step);
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&load_bench.step);
+
     const perf_step = b.step("perf", "Run the local asset-cooking and loading stress suite");
     const perf_cmd = b.addSystemCommand(&.{ "python3", "scripts/perf/run_stress.py", "--zimp", "zig-out/bin/zimp", "--load-bench", "zig-out/bin/zimp-load-bench" });
     perf_cmd.has_side_effects = true;
@@ -141,8 +146,9 @@ fn addZstd(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarg
         },
         .flags = flags,
     });
-    // The BMI2 Huffman decoder; zstd only enables it on x86_64 ELF/Mach-O.
-    if (target.result.cpu.arch == .x86_64 and target.result.os.tag != .windows) {
+    // The BMI2 Huffman decoder. zstd enables it on x86_64 Linux, macOS and
+    // Windows (portability_macros.h), so huf_decompress.c references it there.
+    if (target.result.cpu.arch == .x86_64) {
         mod.addCSourceFile(.{ .file = b.path("external/zstd/decompress/huf_decompress_amd64.S"), .flags = flags });
     }
 }
