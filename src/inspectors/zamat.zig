@@ -33,7 +33,8 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("", .{});
     log.info("Texture Slots:", .{});
     log.info("  {s: >5}  {s: >18}  {s: >3}  {s: <36}  {s}", .{ "index", "name_hash", "uv", "texture", "sampler" });
-    log.info("  {s}", .{"-" ** 100});
+    const separator: [100]u8 = @splat('-');
+    log.info("  {s}", .{separator});
     for (0..material.texture_slots.len) |i| {
         const entry = material.textureSlot(i);
         const sampler = entry.sampler;
@@ -54,7 +55,9 @@ fn inspectZamat(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("", .{});
     log.info("Params:", .{});
     log.info("  {s: >5}  {s: >18}  {s: <6}  {s}", .{ "index", "name_hash", "type", "value" });
-    log.info("  {s}", .{"-" ** 60});
+
+    const separator2: [60]u8 = @splat('-');
+    log.info("  {s}", .{separator2});
     for (0..material.params.len) |i| {
         const entry = material.param(i);
         var value_buf: [96]u8 = undefined;

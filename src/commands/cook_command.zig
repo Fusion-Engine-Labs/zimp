@@ -162,7 +162,7 @@ pub const CookCommand = struct {
             .safety = false,
         });
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             var debug_allocator: MetricsAllocator = .{
                 .backing_allocator = self.allocator,
             };
@@ -377,7 +377,7 @@ test "CookCommand.parseFromArgs rejects --project without a manifest" {
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const len = try tmp.dir.realPathFile(testing.io, ".", &real_path_buf);
 
-    const root_z = try testing.allocator.dupeZ(u8, real_path_buf[0..len]);
+    const root_z = try testing.allocator.dupeSentinel(u8, real_path_buf[0..len], '\x00');
     defer testing.allocator.free(root_z);
     const args: []const [:0]const u8 = &.{ "zimp", "cook", "--project", root_z };
     const result = CookCommand.parseFromArgs(testing.allocator, testing.io, args);
@@ -413,7 +413,7 @@ test "project cook derives stable ids" {
 
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const len = try tmp.dir.realPathFile(testing.io, ".", &real_path_buf);
-    const root_path = try testing.allocator.dupeZ(u8, real_path_buf[0..len]);
+    const root_path = try testing.allocator.dupeSentinel(u8, real_path_buf[0..len], '\x00');
     defer testing.allocator.free(root_path);
 
     try runProjectCook(root_path);

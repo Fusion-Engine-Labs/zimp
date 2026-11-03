@@ -1,11 +1,27 @@
 const std = @import("std");
 const zimp = @import("src/root.zig");
 
+const Translator = @import("translate_c").Translator;
+
 pub const addProjectCookStep = zimp.addProjectCookStep;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const translate_c = b.dependency("translate_c", .{});
+
+    const stb_translator: Translator = .init(translate_c, .{
+        .c_source_file = b.path("external/image/stb_image.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const zstd_translator: Translator = .init(translate_c, .{
+        .c_source_file = b.path("external/zstd/zstd.h"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const zob_dep = b.dependency("zob", .{
         .target = target,
@@ -18,6 +34,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "zob", .module = zob_mod },
+            .{ .name = "stb", .module = stb_translator.mod },
+            .{ .name = "zstd", .module = zstd_translator.mod },
         },
     });
 
@@ -43,6 +61,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addIncludePath(b.path("external/image"));
     exe.root_module.addIncludePath(b.path("external/zstd"));
     exe.root_module.addImport("zob", zob_mod);
+    exe.root_module.addImport("stb", stb_translator.mod);
+    exe.root_module.addImport("zstd", zstd_translator.mod);
 
     b.installArtifact(exe);
 
@@ -53,10 +73,7 @@ pub fn build(b: *std.Build) void {
 
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
+    run_cmd.addPassthruArgs();
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
@@ -89,9 +106,7 @@ pub fn build(b: *std.Build) void {
     perf_cmd.has_side_effects = true;
     perf_cmd.step.dependOn(b.getInstallStep());
     perf_cmd.step.dependOn(&install_load_bench.step);
-    if (b.args) |args| {
-        perf_cmd.addArgs(args);
-    }
+    perf_cmd.addPassthruArgs();
     perf_step.dependOn(&perf_cmd.step);
 
     const docs_lib = b.addLibrary(.{

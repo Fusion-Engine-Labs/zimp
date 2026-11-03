@@ -161,7 +161,7 @@ pub const GltfAccessor = struct {
             .stride = stride,
             .element_size = element_size,
             .count = count,
-            .component_type = @intFromEnum(self.componentType),
+            .component_type = @backingInt(self.componentType),
             .component_count = num_components,
             .component_size = component_size,
             .normalized = self.normalized,
@@ -709,7 +709,7 @@ test "accessor views decode interleaved data without a copy" {
 }
 
 test "accessor view validates zero count, stride, truncation, and overflow" {
-    const bytes = [_]u8{0} ** 16;
+    const bytes: [16]u8 = @splat(0);
     const buffers = [_][]const u8{&bytes};
     const views = [_]GltfBufferView{.{ .buffer = 0, .byteLength = bytes.len, .byteStride = 8 }};
     const packed_views = [_]GltfBufferView{.{ .buffer = 0, .byteLength = bytes.len }};

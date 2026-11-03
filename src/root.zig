@@ -296,7 +296,7 @@ fn touchDecls(comptime T: type, comptime depth: u8) void {
         else => return,
     }
     for (std.meta.declarations(T)) |decl| {
-        const field = @field(T, decl.name);
+        const field = @field(T, decl);
         if (@TypeOf(field) == type) touchDecls(field, depth - 1);
     }
 }

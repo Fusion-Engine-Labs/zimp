@@ -256,7 +256,7 @@ pub const Cache = struct {
         try io_writer.writeInt(u16, @intCast(self.host_os.len), .little);
         try io_writer.writeAll(self.host_os);
         try io_writer.writeAll(&self.project_id.uuid.bytes);
-        try io_writer.writeByte(@intFromEnum(self.target_profile));
+        try io_writer.writeByte(@backingInt(self.target_profile));
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
@@ -267,7 +267,7 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, entry.cooked_size, .little);
             try io_writer.writeInt(i96, entry.cooked_at, .little);
             try io_writer.writeInt(u16, entry.flags, .little);
-            try io_writer.writeInt(u16, if (entry.asset_kind) |kind| @intFromEnum(kind) else std.math.maxInt(u16), .little);
+            try io_writer.writeInt(u16, if (entry.asset_kind) |kind| @backingInt(kind) else std.math.maxInt(u16), .little);
             try io_writer.writeInt(u16, @intCast(entry.source_path.len), .little);
             try io_writer.writeAll(entry.source_path);
             try io_writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
@@ -607,7 +607,7 @@ fn writeTestCacheWithOutputDirAndDependencies(
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little);
     try writer.writeAll(currentHostOsName());
     try writer.writeAll(&ProjectId.zero.uuid.bytes);
-    try writer.writeByte(@intFromEnum(TargetProfile.host()));
+    try writer.writeByte(@backingInt(TargetProfile.host()));
 
     for (entries) |entry| {
         try writer.writeInt(u64, entry.source_path_hash, .little);
@@ -618,7 +618,7 @@ fn writeTestCacheWithOutputDirAndDependencies(
         try writer.writeInt(u64, entry.cooked_size, .little);
         try writer.writeInt(i96, entry.cooked_at, .little);
         try writer.writeInt(u16, entry.flags, .little);
-        try writer.writeInt(u16, if (entry.asset_kind) |kind| @intFromEnum(kind) else std.math.maxInt(u16), .little);
+        try writer.writeInt(u16, if (entry.asset_kind) |kind| @backingInt(kind) else std.math.maxInt(u16), .little);
         try writer.writeInt(u16, @intCast(entry.source_path.len), .little);
         try writer.writeAll(entry.source_path);
         try writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
@@ -1039,7 +1039,7 @@ test "read errors on truncated entry data" {
     try writer.writeInt(u16, @intCast(currentHostOsName().len), .little); // host_os len
     try writer.writeAll(currentHostOsName()); // host_os
     try writer.writeAll(&ProjectId.zero.uuid.bytes); // project_id
-    try writer.writeByte(@intFromEnum(TargetProfile.host())); // target_profile
+    try writer.writeByte(@backingInt(TargetProfile.host())); // target_profile
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);

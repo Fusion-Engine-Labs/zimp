@@ -5,8 +5,12 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zob = .{
-            .url = "git+https://github.com/Fusion-Engine-Labs/zob.git#c4ee545ba07e59c4aac95bd5c39f932d2ee9668d",
-            .hash = "zob-1.2.0-qYajyLa8AAA0NgQZaYY6DTC8GuKqWlgpOXkq-Xze4soh",
+            .url = "git+https://github.com/Fusion-Engine-Labs/zob.git#7a9e73c34413bc23e41a64f0e1cf80eecc201759",
+            .hash = "zob-1.2.0-qYajyJu8AACAIh6ql5GsHW49zvb-UCKyf1Py8bsKzeVl",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.1#4f5ad374e50d1a98d3da79fa5d3bda9949103bf7",
+            .hash = "translate_c-2.0.1-Q_BUWmpOBwCIhy--up1q6cl3OlIQE86iJU8R-bZ01aPj",
         },
     },
     .paths = .{

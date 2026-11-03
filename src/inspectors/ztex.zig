@@ -20,7 +20,8 @@ fn inspectZtex(_: std.mem.Allocator, bytes: wire.Bytes) !void {
     log.info("", .{});
     log.info("Mip Levels:", .{});
     log.info("  {s: >5}  {s: >8}  {s: >8}  {s: >6}  {s: >10}  {s: >10}", .{ "level", "width", "height", "depth", "offset", "size" });
-    log.info("  {s}", .{"-" ** 60});
+    const separator: [60]u8 = @splat('-');
+    log.info("  {s}", .{separator});
 
     var total_data_size: u64 = 0;
     for (texture.mips, 0..) |span, i| {

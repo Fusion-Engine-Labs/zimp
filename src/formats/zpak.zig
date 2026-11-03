@@ -253,7 +253,7 @@ pub const ZPak = struct {
 
     /// Indices of every entry of `kind`, sorted by id.
     pub fn kindRange(self: *const ZPak, kind: AssetKind) Range {
-        const k = @intFromEnum(kind);
+        const k = @backingInt(kind);
         return .{ .start = self.kind_start[k], .end = self.kind_start[k + 1] };
     }
 
@@ -284,11 +284,11 @@ pub const ZPak = struct {
     }
 
     pub fn kindAt(self: *const ZPak, index: u32) AssetKind {
-        return @enumFromInt(self.entries[index].kind);
+        return @fromBackingInt(@intCast(self.entries[index].kind));
     }
 
     pub fn codecAt(self: *const ZPak, index: u32) Codec {
-        return @enumFromInt(self.entries[index].codec);
+        return @fromBackingInt(@intCast(self.entries[index].codec));
     }
 
     pub fn nameAt(self: *const ZPak, index: u32) []const u8 {
@@ -393,8 +393,8 @@ pub const Writer = struct {
             .size = @intCast(size),
             .first_chunk = @intCast(self.chunk_ends.items.len),
             .name = .{ .offset = @intCast(self.names.items.len), .len = @intCast(item.name.len) },
-            .kind = @intFromEnum(item.kind),
-            .codec = @intFromEnum(item.payload),
+            .kind = @backingInt(item.kind),
+            .codec = @backingInt(item.payload),
         };
         if (self.entries.items.len > 0) try checkOrder(&self.entries.items[self.entries.items.len - 1], &entry);
 
@@ -705,10 +705,10 @@ test "view rejects corrupt entries" {
             e.size = @intCast(wire.max_asset_bytes + 1);
         }
         fn noneWithChunks(e: *align(1) Entry) void {
-            e.codec = @intFromEnum(Codec.none);
+            e.codec = @backingInt(Codec.none);
         }
         fn zstdNotSmaller(e: *align(1) Entry) void {
-            e.codec = @intFromEnum(Codec.zstd);
+            e.codec = @backingInt(Codec.zstd);
         }
         fn firstChunk(e: *align(1) Entry) void {
             e.first_chunk += 1;

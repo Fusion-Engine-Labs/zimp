@@ -410,7 +410,7 @@ pub fn decode(allocator: std.mem.Allocator, bytes: wire.Bytes) !document.SceneDo
                 .fields = fields[cursor.field..][0..component.field_count],
             };
             for (t.fields[cursor.field..][0..component.field_count], component_out.fields) |field, *field_out| {
-                const kind: ValueKind = @enumFromInt(field.kind);
+                const kind: ValueKind = @fromBackingInt(@intCast(field.kind));
                 const lanes = t.values[cursor.lane..][0..kind.lanes()];
                 cursor.lane += lanes.len;
                 field_out.* = .{
@@ -598,7 +598,7 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, scene: *const document.SceneDoc
             for (fields, 0..) |field, j| {
                 if (j > 0 and fields[j - 1].number == field.number) return error.DuplicateFieldNumber;
                 const kind = try kindOf(field.value);
-                fields_out[cursor.field] = .{ .number = @intCast(field.number), .kind = @intFromEnum(kind) };
+                fields_out[cursor.field] = .{ .number = @intCast(field.number), .kind = @backingInt(kind) };
                 cursor.field += 1;
                 const lanes = values_out[cursor.lane..][0..kind.lanes()];
                 cursor.lane += lanes.len;
@@ -1022,7 +1022,7 @@ test "decode rejects hostile tables" {
         }.f },
         .{ .expected = error.InvalidLayout, .patch = struct {
             fn f(t: TestTables) void {
-                t.fields[t.fields.len - 1].kind = @intFromEnum(ValueKind.quat);
+                t.fields[t.fields.len - 1].kind = @backingInt(ValueKind.quat);
             }
         }.f },
         .{ .expected = error.InvalidLayout, .patch = struct {

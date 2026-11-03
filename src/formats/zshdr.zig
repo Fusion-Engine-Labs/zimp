@@ -219,7 +219,7 @@ pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
     var out: wire.LayoutWriter = .{ .writer = writer };
     try out.value(Header{
         .file = .init(MAGIC, ZSHDR_VERSION, total_size),
-        .stage = @intFromEnum(cooked.stage),
+        .stage = @backingInt(cooked.stage),
         .variant_count = @intCast(cooked.variant_names.len),
         .variant_defines = variant_defines,
         .prologue = prologue,

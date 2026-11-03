@@ -59,7 +59,7 @@ pub const LooseStore = struct {
         var kind_start: [zpak.kind_count + 1]u32 = undefined;
         var next_kind: usize = 0;
         for (entries, 0..) |entry, i| {
-            while (next_kind <= @intFromEnum(entry.kind)) : (next_kind += 1) kind_start[next_kind] = @intCast(i);
+            while (next_kind <= @backingInt(entry.kind)) : (next_kind += 1) kind_start[next_kind] = @intCast(i);
         }
         while (next_kind <= zpak.kind_count) : (next_kind += 1) kind_start[next_kind] = @intCast(entries.len);
 
@@ -77,7 +77,7 @@ pub const LooseStore = struct {
     }
 
     pub fn kindRange(self: *const LooseStore, kind: AssetKind) zpak.Range {
-        const k = @intFromEnum(kind);
+        const k = @backingInt(kind);
         return .{ .start = self.kind_start[k], .end = self.kind_start[k + 1] };
     }
 
@@ -110,7 +110,7 @@ pub const LooseStore = struct {
     }
 
     fn entryLessThan(_: void, a: Entry, b: Entry) bool {
-        if (a.kind != b.kind) return @intFromEnum(a.kind) < @intFromEnum(b.kind);
+        if (a.kind != b.kind) return @backingInt(a.kind) < @backingInt(b.kind);
         return std.mem.order(u8, &a.id.uuid.bytes, &b.id.uuid.bytes) == .lt;
     }
 };

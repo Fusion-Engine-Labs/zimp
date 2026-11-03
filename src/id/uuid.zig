@@ -7,7 +7,7 @@ pub const ParseError = error{
 pub const Uuid = struct {
     bytes: [16]u8,
 
-    pub const zero: Uuid = .{ .bytes = [_]u8{0} ** 16 };
+    pub const zero: Uuid = .{ .bytes = @splat(0) };
 
     pub fn v4(random: std.Random) Uuid {
         var id: Uuid = .{ .bytes = undefined };
@@ -156,8 +156,8 @@ test "Uuid.toString formats canonical lowercase UUID text" {
 
 test "Uuid equality and zero detection use all bytes" {
     const zero = Uuid.zero;
-    const same_zero = Uuid.fromBytes([_]u8{0} ** 16);
-    var non_zero_bytes = [_]u8{0} ** 16;
+    const same_zero = Uuid.fromBytes(@splat(0));
+    var non_zero_bytes: [16]u8 = @splat(0);
     non_zero_bytes[15] = 1;
     const non_zero = Uuid.fromBytes(non_zero_bytes);
 

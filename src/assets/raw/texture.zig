@@ -1,9 +1,6 @@
 const std = @import("std");
 const log = @import("../../logger.zig");
-
-pub const stb = @cImport({
-    @cInclude("stb_image.h");
-});
+pub const stb = @import("stb");
 
 pub const ColorSpace = enum(u8) {
     srgb = 0,
@@ -818,7 +815,7 @@ test "getPixel: returns correct pixel data" {
 }
 
 test "setPixel: writes correct pixel data" {
-    var pixels = [_]u8{0} ** 8;
+    var pixels: [8]u8 = @splat(0);
     var image = RawTexture{ .width = 2, .height = 1, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .color_srgb };
     try image.setPixel(1, 0, &.{ 11, 22, 33, 44 });
     try testing.expectEqual(@as(u8, 11), pixels[4]);
@@ -828,13 +825,13 @@ test "setPixel: writes correct pixel data" {
 }
 
 test "setPixel: returns error for out of bounds" {
-    var pixels = [_]u8{0} ** 4;
+    var pixels: [4]u8 = @splat(0);
     var image = RawTexture{ .width = 1, .height = 1, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .color_srgb };
     try testing.expectError(error.OutOfBounds, image.setPixel(1, 0, &.{ 0, 0, 0, 0 }));
 }
 
 test "setPixel: returns error for wrong color length" {
-    var pixels = [_]u8{0} ** 4;
+    var pixels: [4]u8 = @splat(0);
     var image = RawTexture{ .width = 1, .height = 1, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .color_srgb };
     try testing.expectError(error.InvalidColor, image.setPixel(0, 0, &.{ 0, 0, 0 }));
 }
@@ -863,7 +860,7 @@ test "downsample uses the preceding level" {
 
 test "downsample handles non-power-of-two and single-axis dimensions" {
     const alloc = testing.allocator;
-    var npot_pixels = [_]u8{128} ** (5 * 3 * 4);
+    var npot_pixels: [60]u8 = @splat(128);
     const npot = RawTexture{ .width = 5, .height = 3, .channels = 4, .pixels = .{ .ldr = &npot_pixels }, .class = .single_linear };
     const npot_scratch = try alloc.alloc(f32, npot.mipScratchLen());
     defer alloc.free(npot_scratch);
@@ -876,7 +873,7 @@ test "downsample handles non-power-of-two and single-axis dimensions" {
     try testing.expectEqual(@as(u32, 1), npot_last.width);
     try testing.expectEqual(@as(u32, 1), npot_last.height);
 
-    var vertical_pixels = [_]u8{128} ** (5 * 4);
+    var vertical_pixels: [20]u8 = @splat(128);
     const vertical = RawTexture{ .width = 1, .height = 5, .channels = 4, .pixels = .{ .ldr = &vertical_pixels }, .class = .single_linear };
     const vertical_scratch = try alloc.alloc(f32, vertical.mipScratchLen());
     defer alloc.free(vertical_scratch);
@@ -892,8 +889,9 @@ test "downsample handles non-power-of-two and single-axis dimensions" {
 
 test "HDR downsample uses the bounded row scratch" {
     const alloc = testing.allocator;
-    var pixels = [_]f32{ 0.25, 0.5, 1.0 } ** (5 * 3);
-    const image = RawTexture{ .width = 5, .height = 3, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
+    var texels: [5 * 3][3]f32 = @splat(.{ 0.25, 0.5, 1.0 });
+    const pixels: []f32 = @ptrCast(&texels);
+    const image = RawTexture{ .width = 5, .height = 3, .channels = 3, .pixels = .{ .hdr = pixels }, .class = .hdr_linear };
     const scratch = try alloc.alloc(f32, image.mipScratchLen());
     defer alloc.free(scratch);
 

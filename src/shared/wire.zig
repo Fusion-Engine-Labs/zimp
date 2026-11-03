@@ -80,7 +80,7 @@ comptime {
 pub fn assertTightLayout(comptime T: type) void {
     comptime {
         var sum: usize = 0;
-        for (@typeInfo(T).@"struct".fields) |field| sum += @sizeOf(field.type);
+        for (@typeInfo(T).@"struct".field_types) |ty| sum += @sizeOf(ty);
         if (sum != @sizeOf(T)) @compileError(@typeName(T) ++ " has implicit padding");
         if (@alignOf(T) > section_alignment) @compileError(@typeName(T) ++ " is over-aligned");
     }

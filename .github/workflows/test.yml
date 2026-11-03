@@ -25,7 +25,7 @@ jobs:
             - name: Setup Zig
               uses: mlugg/setup-zig@v2
               with:
-                  version: 0.16.0
+                  version: 0.17.0
                   cache-key: fmt
 
             - name: Check formatting
@@ -45,7 +45,7 @@ jobs:
             - name: Setup Zig
               uses: mlugg/setup-zig@v2
               with:
-                  version: 0.16.0
+                  version: 0.17.0
                   cache-key: test-${{ matrix.optimize }}
 
             # check covers the CLI, the load bench and the test binary
@@ -76,7 +76,7 @@ jobs:
             - name: Setup Zig
               uses: mlugg/setup-zig@v2
               with:
-                  version: 0.16.0
+                  version: 0.17.0
                   cache-key: cross-${{ matrix.target }}
 
             - name: Compile for ${{ matrix.target }}
@@ -103,7 +103,7 @@ jobs:
             - name: Setup Zig
               uses: mlugg/setup-zig@v2
               with:
-                  version: 0.16.0
+                  version: 0.17.0
                   cache-key: examples-${{ matrix.target }}
 
             - name: Build consumer example for ${{ matrix.target }}
