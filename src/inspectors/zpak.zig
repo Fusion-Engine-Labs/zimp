@@ -29,7 +29,7 @@ pub fn inspect(gpa: std.mem.Allocator, io: std.Io, store: *PackStore) !void {
         var size: u64 = 0;
         var stored: u64 = 0;
         for (pak.entries[range.start..range.end]) |entry| {
-            if (entry.codec == @intFromEnum(zpak.Codec.zstd)) compressed += 1;
+            if (entry.codec == @backingInt(zpak.Codec.zstd)) compressed += 1;
             size += entry.size;
             stored += entry.stored_size;
         }

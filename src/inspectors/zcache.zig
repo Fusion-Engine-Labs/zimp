@@ -234,7 +234,7 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeInt(u64, 512, .little);
     try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
     try writer.writeInt(u16, 0, .little);
-    try writer.writeInt(u16, @intFromEnum(AssetKind.mesh), .little);
+    try writer.writeInt(u16, @backingInt(AssetKind.mesh), .little);
     const source_path = "meshes/triangle.glb";
     try writer.writeInt(u16, source_path.len, .little);
     try writer.writeAll(source_path);
@@ -291,7 +291,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u64, 2048 * (i + 1), .little); // cooked_size
         try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // cooked_at
         try writer.writeInt(u16, 0, .little); // flags
-        try writer.writeInt(u16, @intFromEnum(AssetKind.mesh), .little); // asset_kind
+        try writer.writeInt(u16, @backingInt(AssetKind.mesh), .little); // asset_kind
         const source_path = "meshes/test.glb";
         try writer.writeInt(u16, source_path.len, .little);
         try writer.writeAll(source_path);

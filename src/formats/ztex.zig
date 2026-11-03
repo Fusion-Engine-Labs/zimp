@@ -179,9 +179,9 @@ pub const Zatex = struct {
             .depth = cooked_tex.depth,
             .array_layers = cooked_tex.array_layers,
             .mip_count = @intCast(mip_count),
-            .format = @intFromEnum(cooked_tex.format),
-            .texture_type = @intFromEnum(cooked_tex.texture_type),
-            .color_space = @intFromEnum(cooked_tex.color_space),
+            .format = @backingInt(cooked_tex.format),
+            .texture_type = @backingInt(cooked_tex.texture_type),
+            .color_space = @backingInt(cooked_tex.color_space),
         });
         try out.slice(spans[0..mip_count]);
         level = mip_count;
@@ -419,10 +419,10 @@ test "Zatex.view rejects a texture type the dimensions don't fit" {
     _ = try Zatex.view(buf[0..len]);
 
     // Six layers but tagged 2D.
-    buf[@offsetOf(Header, "texture_type")] = @intFromEnum(TextureType.texture_2d);
+    buf[@offsetOf(Header, "texture_type")] = @backingInt(TextureType.texture_2d);
     try testing.expectError(error.InvalidTextureShape, Zatex.view(buf[0..len]));
     // Six layers tagged cube is fine (4x4 is square).
-    buf[@offsetOf(Header, "texture_type")] = @intFromEnum(TextureType.texture_cube);
+    buf[@offsetOf(Header, "texture_type")] = @backingInt(TextureType.texture_cube);
     _ = try Zatex.view(buf[0..len]);
     std.mem.writeInt(u32, buf[@offsetOf(Header, "array_layers")..][0..4], 0, .little);
     try testing.expectError(error.InvalidDimensions, Zatex.view(buf[0..len]));
@@ -523,9 +523,9 @@ test "Zatex.view rejects largest-first data order" {
         .depth = 1,
         .array_layers = 1,
         .mip_count = 2,
-        .format = @intFromEnum(TexelFormat.r8),
-        .texture_type = @intFromEnum(TextureType.texture_2d),
-        .color_space = @intFromEnum(ColorSpace.linear),
+        .format = @backingInt(TexelFormat.r8),
+        .texture_type = @backingInt(TextureType.texture_2d),
+        .color_space = @backingInt(ColorSpace.linear),
     });
     try out.slice(&[_]wire.Span{ level0, level1 });
     try out.section(level0, &.{ 1, 2, 3, 4 });
@@ -552,9 +552,9 @@ pub fn writeAliasedMipFile(buf: []align(wire.section_alignment) u8) wire.Bytes {
         .depth = 1,
         .array_layers = 1,
         .mip_count = mip_count,
-        .format = @intFromEnum(TexelFormat.bc4),
-        .texture_type = @intFromEnum(TextureType.texture_2d),
-        .color_space = @intFromEnum(ColorSpace.linear),
+        .format = @backingInt(TexelFormat.bc4),
+        .texture_type = @backingInt(TextureType.texture_2d),
+        .color_space = @backingInt(ColorSpace.linear),
     }) catch unreachable;
     for (0..mip_count) |_| out.value(wire.Span{ .offset = @intCast(data_offset), .len = 8 }) catch unreachable;
     out.padTo(data_offset) catch unreachable;
