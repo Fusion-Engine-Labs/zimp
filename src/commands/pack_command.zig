@@ -188,7 +188,7 @@ fn logSummary(out_path: []const u8, stats: *const packer.Stats, elapsed_ns: u64)
     for (stats.kinds, 0..) |kind, k| {
         if (kind.entries == 0) continue;
         log.info("  {s}: {d} assets ({d} zstd), {d} -> {d} bytes", .{
-            @tagName(@as(AssetKind, @enumFromInt(k))),
+            @tagName(@as(AssetKind, @fromBackingInt(@intCast(k)))),
             kind.entries,
             kind.compressed,
             kind.asset_bytes,
@@ -241,7 +241,7 @@ test "PackCommand.parseFromArgs reads source, output, level, and --no-compress i
 fn realPath(dir: std.Io.Dir) ![:0]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const len = try dir.realPathFile(testing.io, ".", &buf);
-    return testing.allocator.dupeZ(u8, buf[0..len]);
+    return testing.allocator.dupeSentinel(u8, buf[0..len], '\x00');
 }
 
 test "pack --source packs a directory-mode cook that loads back" {

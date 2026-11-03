@@ -180,7 +180,8 @@ test "Cache.read returns StaleVersion for wrong version" {
 
     try writer.writeAll(cache.MAGIC);
     try writer.writeInt(u16, 999, .little);
-    try writer.writeAll(&(.{0} ** 50));
+    const bytes: [50]u8 = @splat(0);
+    try writer.writeAll(&bytes);
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
     try testing.expectError(error.StaleVersion, cache.Cache.read(testing.allocator, &reader));
@@ -197,7 +198,8 @@ test "Cache.read accepts zero entries" {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
-    try writer.writeAll(&[_]u8{0} ** 16); // project_id
+    const project_id: [16]u8 = @splat(0);
+    try writer.writeAll(&project_id); // project_id
     try writer.writeByte(0); // target_profile
     try writer.writeInt(u32, 0, .little); // dependency_row_count
 
@@ -220,7 +222,8 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
-    try writer.writeAll(&[_]u8{0} ** 16); // project_id
+    const project_id: [16]u8 = @splat(0);
+    try writer.writeAll(&project_id); // project_id
     try writer.writeByte(0); // target_profile
 
     try writer.writeInt(u64, 0xAABBCCDD, .little);
@@ -275,7 +278,8 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
     try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u16, @intCast(cache.currentHostOsName().len), .little); // host_os len
     try writer.writeAll(cache.currentHostOsName()); // host_os
-    try writer.writeAll(&[_]u8{0} ** 16); // project_id
+    const project_id: [16]u8 = @splat(0);
+    try writer.writeAll(&project_id); // project_id
     try writer.writeByte(0); // target_profile
 
     for (0..opts.entry_count) |i| {

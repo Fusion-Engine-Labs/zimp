@@ -149,7 +149,7 @@ pub fn write(
         for (batch.items, inputs[start..end]) |*loaded, input| {
             const payload = choosePayload(loaded);
             try writer.add(.{ .id = input.id, .kind = input.kind, .name = input.path, .payload = payload });
-            const kind = &stats.kinds[@intFromEnum(input.kind)];
+            const kind = &stats.kinds[@backingInt(input.kind)];
             kind.entries += 1;
             kind.asset_bytes += loaded.bytes.len;
             kind.stored_bytes += switch (payload) {
@@ -306,7 +306,7 @@ fn inputLessThan(_: void, a: Input, b: Input) bool {
 }
 
 fn orderInput(kind: AssetKind, id: AssetId, input: Input) std.math.Order {
-    if (kind != input.kind) return std.math.order(@intFromEnum(kind), @intFromEnum(input.kind));
+    if (kind != input.kind) return std.math.order(@backingInt(kind), @backingInt(input.kind));
     return std.mem.order(u8, &id.uuid.bytes, &input.id.uuid.bytes);
 }
 
@@ -398,7 +398,7 @@ test "writeFile packs, compresses what pays, and loads back" {
     var inputs = Fixture.shaderInputs();
     const stats = try fixture.pack(&inputs, "out/assets.zpak", .{ .level = 3 });
 
-    const shaders = stats.kinds[@intFromEnum(AssetKind.shader_stage)];
+    const shaders = stats.kinds[@backingInt(AssetKind.shader_stage)];
     try testing.expectEqual(@as(u32, 2), shaders.entries);
     try testing.expectEqual(@as(u32, 1), shaders.compressed);
     try testing.expect(shaders.stored_bytes < shaders.asset_bytes);

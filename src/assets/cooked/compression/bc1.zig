@@ -337,7 +337,7 @@ test "encodeColorBlock: solid blocks decode within one step of the source" {
     var v: u32 = 0;
     while (v < 256) : (v += 5) {
         const px = [4]u8{ @intCast(v), @intCast(255 - v), @intCast((v * 7) & 0xff), 255 };
-        const block = [_][4]u8{px} ** 16;
+        const block: [16][4]u8 = @splat(px);
         const encoded = encodeColorBlock(&block);
         try testing.expect(maxChannelError(&block, encoded) <= 1);
     }

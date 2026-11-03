@@ -140,7 +140,8 @@ test "parse returns FileToSmall when input is too short" {
 }
 
 test "parse returns InvalidMagic with wrong magic number" {
-    var glb = buildGlb("{}", "\x00" ** 16);
+    const bin: [16]u8 = @splat('\x00');
+    var glb = buildGlb("{}", &bin);
     // Overwrite magic with garbage
     @as(*align(1) u32, @ptrCast(glb[0..4])).* = 0xDEADBEEF;
 
@@ -149,7 +150,8 @@ test "parse returns InvalidMagic with wrong magic number" {
 }
 
 test "parse returns InvalidVersion with wrong version" {
-    var glb = buildGlb("{}", "\x00" ** 16);
+    const bin: [16]u8 = @splat('\x00');
+    var glb = buildGlb("{}", &bin);
     // Overwrite version with 1
     @as(*align(1) u32, @ptrCast(glb[4..8])).* = 1;
 
@@ -158,7 +160,8 @@ test "parse returns InvalidVersion with wrong version" {
 }
 
 test "parse returns LengthMismatch when header length does not match file size" {
-    var glb = buildGlb("{}", "\x00" ** 16);
+    const bin: [16]u8 = @splat('\x00');
+    var glb = buildGlb("{}", &bin);
     // Overwrite length with wrong value
     @as(*align(1) u32, @ptrCast(glb[8..12])).* = 999;
 
@@ -167,7 +170,8 @@ test "parse returns LengthMismatch when header length does not match file size" 
 }
 
 test "parse returns InvalidMagic with wrong json chunk type" {
-    var glb = buildGlb("{}", "\x00" ** 16);
+    const bin: [16]u8 = @splat('\x00');
+    var glb = buildGlb("{}", &bin);
     // Overwrite JSON chunk type
     @as(*align(1) u32, @ptrCast(glb[16..20])).* = 0xDEADBEEF;
 
@@ -176,7 +180,8 @@ test "parse returns InvalidMagic with wrong json chunk type" {
 }
 
 test "parse returns InvalidMagic with wrong bin chunk type" {
-    var glb = buildGlb("{}", "\x00" ** 16);
+    const bin: [16]u8 = @splat('\x00');
+    var glb = buildGlb("{}", &bin);
     // Overwrite BIN chunk type (after header + json chunk header + json data)
     const bin_type_offset = @sizeOf(GLBHeader) + @sizeOf(GLBChunkHeader) + 2 + 4;
     @as(*align(1) u32, @ptrCast(glb[bin_type_offset..][0..4])).* = 0xDEADBEEF;

@@ -558,7 +558,8 @@ pub fn writeAliasedMipFile(buf: []align(wire.section_alignment) u8) wire.Bytes {
     }) catch unreachable;
     for (0..mip_count) |_| out.value(wire.Span{ .offset = @intCast(data_offset), .len = 8 }) catch unreachable;
     out.padTo(data_offset) catch unreachable;
-    out.bytes(&(.{0x7f} ** 8)) catch unreachable;
+    const b: [8]u8 = @splat(0x7f);
+    out.bytes(&b) catch unreachable;
     return buf[0..writer.end];
 }
 

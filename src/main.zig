@@ -11,11 +11,11 @@ pub const std_options: std.Options = .{
 
 /// Debug uses Zig's instrumented process services. Release builds construct
 /// only the throughput-oriented services needed by the cooker.
-const ProcessInit = if (builtin.mode == .Debug) std.process.Init else std.process.Init.Minimal;
+const ProcessInit = if (builtin.mode == .debug) std.process.Init else std.process.Init.Minimal;
 const performance_allocator = if (builtin.single_threaded) std.heap.c_allocator else std.heap.smp_allocator;
 
 pub fn main(init: ProcessInit) !void {
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         const args = try init.minimal.args.toSlice(init.arena.allocator());
         return run(init.gpa, init.io, args);
     }

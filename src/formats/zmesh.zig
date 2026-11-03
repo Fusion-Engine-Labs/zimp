@@ -43,7 +43,7 @@ pub const Stream = enum(u8) {
     joints,
     weights,
 
-    pub const count = @typeInfo(Stream).@"enum".fields.len;
+    pub const count = @typeInfo(Stream).@"enum".field_names.len;
 };
 
 /// File layout: `Header`, then aligned sections in this order: the
@@ -194,7 +194,7 @@ pub const ZMesh = struct {
         const submeshes = try wire.sectionSlice(Submesh, bytes, header.submeshes, header.submesh_count);
 
         for (std.enums.values(Stream)) |stream| {
-            const span = header.streams[@intFromEnum(stream)];
+            const span = header.streams[@backingInt(stream)];
             if (!streamPresent(stream, flags)) {
                 if (span.len != 0) return error.InvalidLayout;
                 continue;
@@ -290,15 +290,15 @@ pub const ZMesh = struct {
     }
 
     pub fn indexFormat(self: *const ZMesh) IndexFormat {
-        return @enumFromInt(self.header.index_format);
+        return @fromBackingInt(@intCast(self.header.index_format));
     }
 
     pub fn codec(self: *const ZMesh) Codec {
-        return @enumFromInt(self.header.codec);
+        return @fromBackingInt(@intCast(self.header.codec));
     }
 
     pub fn jointFormat(self: *const ZMesh) JointFormat {
-        return @enumFromInt(self.header.joint_format);
+        return @fromBackingInt(@intCast(self.header.joint_format));
     }
 
     pub fn hasStream(self: *const ZMesh, stream: Stream) bool {
@@ -311,7 +311,7 @@ pub const ZMesh = struct {
 
     /// Stored (possibly encoded) bytes of a stream; empty when absent.
     pub fn streamBytes(self: *const ZMesh, stream: Stream) []const u8 {
-        const span = self.header.streams[@intFromEnum(stream)];
+        const span = self.header.streams[@backingInt(stream)];
         return self.bytes[span.offset..][0..span.len];
     }
 
@@ -416,7 +416,7 @@ pub const ZMesh = struct {
                 writeElement(raw[pos..][0..s], stream, v, joint_format);
                 pos += s;
             };
-            stream_payloads[@intFromEnum(stream)] = switch (options.codec) {
+            stream_payloads[@backingInt(stream)] = switch (options.codec) {
                 .none => raw,
                 .meshopt => blk: {
                     const buf = try arena.alloc(u8, vertex_codec.encodeBound(vertex_count, s));
@@ -457,9 +457,9 @@ pub const ZMesh = struct {
             .vertex_count = vertex_count,
             .index_count = index_count,
             .format_flags = @bitCast(flags),
-            .index_format = @intFromEnum(index_format),
-            .codec = @intFromEnum(options.codec),
-            .joint_format = @intFromEnum(joint_format),
+            .index_format = @backingInt(index_format),
+            .codec = @backingInt(options.codec),
+            .joint_format = @backingInt(joint_format),
             .parts = try layout.reserve(parts.len * @sizeOf(PartEntry)),
             .material_slots = try layout.reserve(material_slots.len * @sizeOf(wire.AssetRef)),
             .submeshes = try layout.reserve(submesh_total * @sizeOf(Submesh)),
@@ -662,7 +662,7 @@ test "ZMesh.write records magic, version, and exact total size" {
         const header = try wire.structAt(Header, bytes, 0);
         try testing.expectEqual(ZMESH_VERSION, header.file.version);
         try testing.expectEqual(@as(u32, @intCast(bytes.len)), header.file.total_size);
-        try testing.expectEqual(@intFromEnum(codec), header.codec);
+        try testing.expectEqual(@backingInt(codec), header.codec);
     }
 }
 
@@ -854,7 +854,7 @@ test "ZMesh.view rejects corrupted headers and part entries" {
     try testing.expectError(error.InvalidLayout, ZMesh.view(buf[0..len]));
     header.* = original_header;
 
-    header.streams[@intFromEnum(Stream.normals)].offset += 4;
+    header.streams[@backingInt(Stream.normals)].offset += 4;
     try testing.expectError(error.MisalignedSection, ZMesh.view(buf[0..len]));
     header.* = original_header;
 
@@ -862,7 +862,7 @@ test "ZMesh.view rejects corrupted headers and part entries" {
     try testing.expectError(error.Truncated, ZMesh.view(buf[0..len]));
     header.* = original_header;
 
-    header.streams[@intFromEnum(Stream.tangents)].offset = 0xfffffff0; // absent stream with a stray offset
+    header.streams[@backingInt(Stream.tangents)].offset = 0xfffffff0; // absent stream with a stray offset
     try testing.expectError(error.InvalidLayout, ZMesh.view(buf[0..len]));
     header.* = original_header;
 

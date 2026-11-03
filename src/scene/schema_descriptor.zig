@@ -20,7 +20,7 @@ pub fn schemaHash(schemas: []const ComponentSchema) u64 {
             h.update(std.mem.asBytes(&f.number));
             h.update(@tagName(f.kind));
             switch (f.kind) {
-                .asset_ref => |kind| h.update(std.mem.asBytes(&@intFromEnum(kind))),
+                .asset_ref => |kind| h.update(std.mem.asBytes(&@backingInt(kind))),
                 .enum_ref => |es| for (es.entries) |e| {
                     h.update(e.name);
                     h.update(std.mem.asBytes(&e.value));

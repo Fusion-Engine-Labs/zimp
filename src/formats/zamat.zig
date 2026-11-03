@@ -229,11 +229,11 @@ fn encodeSampler(desc: SamplerDesc) !u32 {
     if (!(desc.max_anisotropy >= min_anisotropy and desc.max_anisotropy <= max_anisotropy))
         return error.InvalidMaxAnisotropy;
     return @bitCast(Sampler{
-        .min_filter = @intCast(@intFromEnum(desc.min_filter)),
-        .mag_filter = @intCast(@intFromEnum(desc.mag_filter)),
-        .mip_filter = @intCast(@intFromEnum(desc.mip_filter)),
-        .wrap_s = @intCast(@intFromEnum(desc.wrap_s)),
-        .wrap_t = @intCast(@intFromEnum(desc.wrap_t)),
+        .min_filter = @intCast(@backingInt(desc.min_filter)),
+        .mag_filter = @intCast(@backingInt(desc.mag_filter)),
+        .mip_filter = @intCast(@backingInt(desc.mip_filter)),
+        .wrap_s = @intCast(@backingInt(desc.wrap_s)),
+        .wrap_t = @intCast(@backingInt(desc.wrap_t)),
         .max_anisotropy = @floatCast(desc.max_anisotropy),
     });
 }
@@ -281,7 +281,7 @@ fn encodeParam(entry: cooked_material.ParamEntry) Param {
             break :blk .bool;
         },
     };
-    return .{ .name_hash = entry.name_hash, .param_type = @intFromEnum(param_type), .value = lanes };
+    return .{ .name_hash = entry.name_hash, .param_type = @backingInt(param_type), .value = lanes };
 }
 
 fn decodeParam(p: Param) !ParamValue {
@@ -344,9 +344,9 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         .vertex_shader = .fromId(material.vertex_shader),
         .fragment_shader = .fromId(material.fragment_shader),
         .alpha_cutoff = state.alpha_cutoff,
-        .alpha_mode = @intCast(@intFromEnum(state.alpha_mode)),
-        .cull_mode = @intCast(@intFromEnum(state.cull_mode)),
-        .blend_mode = @intCast(@intFromEnum(state.blend_mode)),
+        .alpha_mode = @intCast(@backingInt(state.alpha_mode)),
+        .cull_mode = @intCast(@backingInt(state.cull_mode)),
+        .blend_mode = @intCast(@backingInt(state.blend_mode)),
         .render_flags = render_flags,
         .texture_slot_count = @intCast(texture_slots.len),
         .param_count = @intCast(params.len),

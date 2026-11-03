@@ -20,7 +20,8 @@ pub fn inspect(gpa: std.mem.Allocator, io: std.Io, store: *PackStore) !void {
     log.info("", .{});
     log.info("By kind:", .{});
     log.info("  {s: <13}  {s: >7}  {s: >5}  {s: >10}  {s: >10}  {s: >6}", .{ "kind", "assets", "zstd", "size", "stored", "ratio" });
-    log.info("  {s}", .{"-" ** 60});
+    const separator: [60]u8 = @splat('-');
+    log.info("  {s}", .{separator});
     for (std.enums.values(AssetKind)) |kind| {
         const range = pak.kindRange(kind);
         if (range.start == range.end) continue;
@@ -42,7 +43,7 @@ pub fn inspect(gpa: std.mem.Allocator, io: std.Io, store: *PackStore) !void {
     log.info("", .{});
     log.info("Entries:", .{});
     log.info("  {s: <13}  {s: <5}  {s: >10}  {s: >10}  {s: >6}  {s}", .{ "kind", "codec", "size", "stored", "ratio", "name" });
-    log.info("  {s}", .{"-" ** 60});
+    log.info("  {s}", .{separator});
     for (0..pak.count()) |i| {
         const index: u32 = @intCast(i);
         const entry = pak.entries[index];

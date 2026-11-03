@@ -3,10 +3,7 @@
 
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("zstd.h");
-});
-
+const c = @import("zstd");
 pub const max_level: i32 = 22;
 
 /// Worst-case frame size for `len` input bytes.

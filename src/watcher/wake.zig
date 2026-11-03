@@ -185,9 +185,9 @@ pub const InotifyWake = struct {
     fn addWatch(self: *InotifyWake, rel: []const u8) !void {
         var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const abs = if (rel.len == 0)
-            try std.fmt.bufPrintZ(&path_buf, "{s}", .{self.root_path})
+            try std.fmt.bufPrintSentinel(&path_buf, "{s}", .{self.root_path}, '\x00')
         else
-            try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ self.root_path, rel });
+            try std.fmt.bufPrintSentinel(&path_buf, "{s}/{s}", .{ self.root_path, rel }, '\x00');
 
         const rc = linux.inotify_add_watch(self.fd, abs.ptr, mask);
         switch (linux.errno(rc)) {
