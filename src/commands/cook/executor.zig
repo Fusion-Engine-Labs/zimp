@@ -546,6 +546,12 @@ pub const Executor = struct {
         defer self.allocator.free(futures);
         @memset(forced, false);
 
+        // Cache updates wait until every job has finished: jobs read the cache
+        // from worker threads, and an update can grow or rehash it under them.
+        var results: std.ArrayList(CookJobResult) = .empty;
+        defer results.deinit(self.allocator);
+        try results.ensureTotalCapacity(self.allocator, count);
+
         var queue = CompletionQueue{ .io = io, .items = completions };
         var ready: std.ArrayList(SourceIndex) = .empty;
         defer ready.deinit(self.allocator);
@@ -589,11 +595,7 @@ pub const Executor = struct {
             completed += 1;
             if (completion.result) |result| {
                 metrics_accumulator.recordJobResult(result);
-                cache_updater.apply(result) catch |err| {
-                    if (first_error == null) {
-                        first_error = err;
-                    }
-                };
+                results.appendAssumeCapacity(result);
                 const changed = result.result == .cooked or result.result == .dependency_changed;
 
                 for (self.dependents.edgesFrom(completion.index)) |dependent| {
@@ -623,6 +625,14 @@ pub const Executor = struct {
 
         for (futures[0..submitted]) |*future| {
             future.await(io);
+        }
+
+        for (results.items) |result| {
+            cache_updater.apply(result) catch |err| {
+                if (first_error == null) {
+                    first_error = err;
+                }
+            };
         }
 
         if (first_error) |err| {
