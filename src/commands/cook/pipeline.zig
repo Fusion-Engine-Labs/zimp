@@ -30,13 +30,10 @@ pub fn run(
         cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
 
         {
+            // Also drops deleted sources from the cache.
             var plan = try planner.build(allocator, ctx, &cache_session.cache, &metrics);
             defer plan.deinit(allocator);
             cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
-
-            const source_files = try planner.sourceSlice(allocator, plan.records.items);
-            defer allocator.free(source_files);
-            cache_session.pruneDeleted(allocator, source_files);
 
             var executor = Executor.init(
                 allocator,

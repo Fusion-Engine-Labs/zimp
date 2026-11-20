@@ -89,6 +89,11 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
     }
 
     const material_topology_changed = try materialTopologyChanged(allocator, sources.items, cache);
+    // Forget deleted sources before the records below take cache indices:
+    // pruning compacts the cache, so an index taken earlier would point at
+    // another source's entry, or past the end. This comes after the topology
+    // check, which has to see deleted materials to recook their meshes.
+    pruneDeleted(allocator, cache, sources.items);
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
@@ -181,12 +186,16 @@ fn materialTopologyChanged(allocator: std.mem.Allocator, sources: []const Source
     return false;
 }
 
-pub fn sourceSlice(allocator: std.mem.Allocator, records: []const SourceRecord) ![]SourceFile {
-    const files = try allocator.alloc(SourceFile, records.len);
-    for (records, files) |record, *file| {
-        file.* = record.source;
+fn pruneDeleted(allocator: std.mem.Allocator, cache: *Cache, sources: []const SourceFile) void {
+    const pruned = cache.pruneDeleted(allocator, sources);
+    if (pruned > 0) {
+        log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
     }
-    return files;
+
+    const pruned_deps = cache.pruneDeletedDependencyRows(allocator, sources);
+    if (pruned_deps > 0) {
+        log.debug("Removed {d} deleted dependency graph row(s) from cache", .{pruned_deps});
+    }
 }
 
 fn buildCsrGraphs(allocator: std.mem.Allocator, graph: *const DepGraph, records: []const SourceRecord) !struct { dependencies: CsrGraph, dependents: CsrGraph } {

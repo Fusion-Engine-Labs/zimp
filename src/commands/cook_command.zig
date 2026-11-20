@@ -9,6 +9,7 @@ const TargetProfile = @import("../assets/cooked/target_profile.zig").TargetProfi
 const cook_metrics = @import("cook_metrics.zig");
 const CountingAllocator = @import("../shared/counting_allocator.zig").CountingAllocator;
 const log = @import("../logger.zig");
+const Cache = @import("../cache/cache.zig").Cache;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -357,6 +358,50 @@ test "CookCommand.run reports failures without leaving stale output" {
 
     const cache_file = try output_tmp.dir.openFile(testing.io, ".zcache", .{});
     cache_file.close(testing.io);
+}
+
+test "CookCommand.run recooks after sources before others were deleted" {
+    var source_tmp = testing.tmpDir(.{});
+    defer source_tmp.cleanup();
+    var output_tmp = testing.tmpDir(.{});
+    defer output_tmp.cleanup();
+
+    // Materials that fail to cook still get cache entries, in path order, so
+    // the first cook leaves one entry per file: a, b, c, d, e.
+    const names = [_][]const u8{ "a.zamat", "b.zamat", "c.zamat", "d.zamat", "e.zamat" };
+    for (names) |name| {
+        const file = try source_tmp.dir.createFile(testing.io, name, .{});
+        var buf: [64]u8 = undefined;
+        var writer = file.writer(testing.io, &buf);
+        try writer.interface.writeAll("not a material");
+        try writer.interface.flush();
+        file.close(testing.io);
+    }
+
+    const source_dir = try std.Io.Dir.openDir(source_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer source_dir.close(testing.io);
+    const output_dir = try std.Io.Dir.openDir(output_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer output_dir.close(testing.io);
+    const cmd: CookCommand = .{
+        .source = source_dir,
+        .output = output_dir,
+        .io = testing.io,
+        .allocator = testing.allocator,
+    };
+    try testing.expectError(error.AssetCookFailed, cmd.run(.none));
+
+    // Deleting the first two shifts every remaining cache entry down by two.
+    // Cache lookups for c, d, and e must follow, not reuse their old slots.
+    try source_tmp.dir.deleteFile(testing.io, "a.zamat");
+    try source_tmp.dir.deleteFile(testing.io, "b.zamat");
+    try testing.expectError(error.AssetCookFailed, cmd.run(.none));
+
+    var cache = try Cache.readFile(testing.allocator, testing.io, output_tmp.dir, ".zcache");
+    defer cache.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), cache.entries.items.len);
+    for (cache.entries.items, [_][]const u8{ "c.zamat", "d.zamat", "e.zamat" }) |entry, name| {
+        try testing.expectEqualStrings(name, entry.source_path);
+    }
 }
 
 test "CookCommand.deinit cleans up without error" {

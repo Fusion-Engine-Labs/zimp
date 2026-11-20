@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const SourceFile = @import("../../assets/source_file.zig").SourceFile;
 const Cache = @import("../../cache/cache.zig").Cache;
 const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
@@ -55,18 +54,6 @@ pub const CacheSession = struct {
 
     pub fn deinit(self: *CacheSession, allocator: std.mem.Allocator) void {
         self.cache.deinit(allocator);
-    }
-
-    pub fn pruneDeleted(self: *CacheSession, allocator: std.mem.Allocator, source_files: []const SourceFile) void {
-        const pruned = self.cache.pruneDeleted(allocator, source_files);
-        if (pruned > 0) {
-            log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
-        }
-
-        const pruned_deps = self.cache.pruneDeletedDependencyRows(allocator, source_files);
-        if (pruned_deps > 0) {
-            log.debug("Removed {d} deleted dependency graph row(s) from cache", .{pruned_deps});
-        }
     }
 
     pub fn persist(self: *CacheSession, allocator: std.mem.Allocator, ctx: *const CookContext) !u64 {
